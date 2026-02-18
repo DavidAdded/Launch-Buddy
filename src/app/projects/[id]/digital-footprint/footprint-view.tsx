@@ -1,9 +1,30 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useMemo } from "react";
 import { requestFootprint } from "../../actions";
 import type { FootprintFullResponse, Source } from "@/lib/footprint-prompt";
 import { FOOTPRINT_GROUPS } from "@/lib/footprint-prompt";
+import {
+  Chart as ChartJS,
+  RadialLinearScale,
+  PointElement,
+  LineElement,
+  Filler,
+  ArcElement,
+  Tooltip,
+  Legend,
+} from "chart.js";
+import { Radar, Doughnut } from "react-chartjs-2";
+
+ChartJS.register(
+  RadialLinearScale,
+  PointElement,
+  LineElement,
+  Filler,
+  ArcElement,
+  Tooltip,
+  Legend,
+);
 
 type FootprintRequest = {
   id: string;
@@ -201,7 +222,7 @@ export function FootprintView({
                       <h4 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
                         {meta.title}
                       </h4>
-                      <p className="mt-0.5 line-clamp-1 text-xs text-zinc-500 dark:text-zinc-400">
+                      <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                         {group.summary}
                       </p>
                     </div>
@@ -237,7 +258,7 @@ export function FootprintView({
                           <div key={qIndex} className="flex flex-col gap-1.5">
                             <div className="flex items-start justify-between gap-3">
                               <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-                                {qIndex + 1}. {q.question}
+                                {q.question}
                               </p>
                               <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                                 {Math.round(q.confidence * 100)}%
@@ -256,6 +277,8 @@ export function FootprintView({
               </div>
             );
           })}
+
+          <FootprintCharts parsed={parsed} />
 
           <div className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
             <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -282,6 +305,175 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
       <span className="text-xs text-zinc-400 dark:text-zinc-500">
         {Math.round(confidence * 100)}%
       </span>
+    </div>
+  );
+}
+
+const SOURCE_TYPE_COLORS: Record<Source["type"], string> = {
+  company_site: "#3b82f6",
+  press: "#8b5cf6",
+  directory: "#f59e0b",
+  review: "#10b981",
+  social: "#ec4899",
+  other: "#6b7280",
+};
+
+function FootprintCharts({ parsed }: { parsed: FootprintFullResponse }) {
+  const { sourceTypeCounts, totalSources, radarData, doughnutData } = useMemo(() => {
+    const counts: Record<Source["type"], number> = {
+      company_site: 0,
+      press: 0,
+      directory: 0,
+      review: 0,
+      social: 0,
+      other: 0,
+    };
+
+    let total = 0;
+    for (const group of parsed.groups) {
+      for (const q of group.questions) {
+        for (const src of q.sources) {
+          if (src.type in counts) {
+            counts[src.type]++;
+          } else {
+            counts.other++;
+          }
+          total++;
+        }
+      }
+    }
+
+    const confidencePerGroup = parsed.groups.map((group, i) => {
+      const avg =
+        group.questions.length > 0
+          ? group.questions.reduce((sum, q) => sum + q.confidence, 0) /
+            group.questions.length
+          : 0;
+      return { label: FOOTPRINT_GROUPS[i]?.title ?? `Group ${i + 1}`, avg };
+    });
+
+    const activeTypes = (Object.keys(counts) as Source["type"][]).filter(
+      (t) => counts[t] > 0,
+    );
+
+    const radar = {
+      labels: confidencePerGroup.map((g) => g.label),
+      datasets: [
+        {
+          label: "Avg Confidence",
+          data: confidencePerGroup.map((g) => Math.round(g.avg * 100)),
+          backgroundColor: "rgba(113, 113, 122, 0.15)",
+          borderColor: "rgba(113, 113, 122, 0.6)",
+          borderWidth: 2,
+          pointBackgroundColor: "rgba(113, 113, 122, 0.8)",
+          pointRadius: 3,
+        },
+      ],
+    };
+
+    const doughnut = {
+      labels: activeTypes.map((t) => sourceTypeLabels[t]),
+      datasets: [
+        {
+          data: activeTypes.map((t) => counts[t]),
+          backgroundColor: activeTypes.map((t) => SOURCE_TYPE_COLORS[t]),
+          borderWidth: 0,
+          hoverOffset: 4,
+        },
+      ],
+    };
+
+    return {
+      sourceTypeCounts: counts,
+      totalSources: total,
+      radarData: radar,
+      doughnutData: doughnut,
+    };
+  }, [parsed]);
+
+  const radarOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { parsed: { r: number } }) => `${ctx.parsed.r}%`,
+        },
+      },
+    },
+    scales: {
+      r: {
+        min: 0,
+        max: 100,
+        ticks: {
+          stepSize: 20,
+          display: false,
+        },
+        grid: {
+          color: "rgba(113, 113, 122, 0.15)",
+        },
+        angleLines: {
+          color: "rgba(113, 113, 122, 0.15)",
+        },
+        pointLabels: {
+          font: { size: 10 },
+          color: "rgba(113, 113, 122, 0.7)",
+        },
+      },
+    },
+  } as const;
+
+  const doughnutOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: "60%",
+    plugins: {
+      legend: {
+        position: "bottom" as const,
+        labels: {
+          boxWidth: 12,
+          padding: 16,
+          font: { size: 11 },
+          color: "rgba(113, 113, 122, 0.7)",
+        },
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: { label: string; parsed: number }) => {
+            const pct =
+              totalSources > 0
+                ? Math.round((ctx.parsed / totalSources) * 100)
+                : 0;
+            return `${ctx.label}: ${ctx.parsed} (${pct}%)`;
+          },
+        },
+      },
+    },
+  } as const;
+
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <h4 className="mb-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+          Confidence by Category
+        </h4>
+        <div className="relative h-64">
+          <Radar data={radarData} options={radarOptions} />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <h4 className="mb-4 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+          Source Distribution
+          <span className="ml-2 text-xs font-normal text-zinc-400 dark:text-zinc-500">
+            {totalSources} total
+          </span>
+        </h4>
+        <div className="relative h-64">
+          <Doughnut data={doughnutData} options={doughnutOptions} />
+        </div>
+      </div>
     </div>
   );
 }
