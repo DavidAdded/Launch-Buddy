@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { requestFootprint } from "../../actions";
-import type { FootprintResponseV2, Source } from "@/lib/footprint-prompt";
+import type { FootprintFullResponse, Source } from "@/lib/footprint-prompt";
+import { FOOTPRINT_GROUPS } from "@/lib/footprint-prompt";
 
 type FootprintRequest = {
   id: string;
@@ -10,7 +11,7 @@ type FootprintRequest = {
   company_name: string;
   status: string;
   error_message: string | null;
-  parsed_response: FootprintResponseV2 | null;
+  parsed_response: FootprintFullResponse | null;
   created_at: string;
 };
 
@@ -28,6 +29,7 @@ export function FootprintView({
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
 
   const latest = requests[selectedIndex] ?? null;
   const parsed = latest?.parsed_response ?? null;
@@ -39,6 +41,18 @@ export function FootprintView({
       if (result.error) {
         setError(result.error);
       }
+    });
+  }
+
+  function toggleGroup(groupId: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
     });
   }
 
@@ -104,10 +118,11 @@ export function FootprintView({
         <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
           <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600 dark:border-zinc-700 dark:border-t-zinc-300" />
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Browsing website and analyzing digital footprint...
+            Browsing website and analyzing 100 questions across 10 categories...
           </p>
           <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
-            This may take 30-60 seconds as the model browses the web.
+            This may take 2-3 minutes as the model browses the web for each
+            category.
           </p>
         </div>
       )}
@@ -159,97 +174,88 @@ export function FootprintView({
       )}
 
       {parsed && (
-        <div className="flex flex-col gap-6">
-          <AuthorityBadge assessment={parsed.overall_authority_assessment} />
+        <div className="flex flex-col gap-4">
+          {parsed.groups.map((group, groupIndex) => {
+            const meta = FOOTPRINT_GROUPS[groupIndex];
+            if (!meta) return null;
+            const isOpen = openGroups.has(meta.id);
+            const avgConfidence =
+              group.questions.length > 0
+                ? group.questions.reduce((sum, q) => sum + q.confidence, 0) /
+                  group.questions.length
+                : 0;
 
-          <Section title="Known For">
-            <div className="flex flex-col gap-3">
-              {parsed.known_for.map((item) => (
-                <div key={item.theme}>
-                  <ConfidenceTag
-                    label={item.theme}
-                    confidence={item.confidence}
-                  />
-                  <SourceLinks sources={item.sources} />
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          <Section title="Industry">
-            <p className="text-sm text-zinc-900 dark:text-zinc-100">
-              {parsed.industry_context.primary}
-            </p>
-            {parsed.industry_context.secondary.length > 0 && (
-              <div className="mt-3 flex flex-col gap-2">
-                {parsed.industry_context.secondary.map((s) => (
-                  <div key={s.label}>
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
-                        {s.label}
-                      </span>
-                      <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                        {Math.round(s.confidence * 100)}%
-                      </span>
+            return (
+              <div
+                key={meta.id}
+                className="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(meta.id)}
+                  className="flex w-full cursor-pointer items-center justify-between px-5 py-4 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">{meta.emoji}</span>
+                    <div>
+                      <h4 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                        {meta.title}
+                      </h4>
+                      <p className="mt-0.5 line-clamp-1 text-xs text-zinc-500 dark:text-zinc-400">
+                        {group.summary}
+                      </p>
                     </div>
-                    <SourceLinks sources={s.sources} />
                   </div>
-                ))}
-              </div>
-            )}
-          </Section>
+                  <div className="ml-4 flex shrink-0 items-center gap-3">
+                    <ConfidenceBar confidence={avgConfidence} />
+                    <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                      {group.questions.length}q
+                    </span>
+                    <svg
+                      className={`h-4 w-4 text-zinc-400 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19 9l-7 7-7-7"
+                      />
+                    </svg>
+                  </div>
+                </button>
 
-          <Section title="Competitors">
-            <div className="flex flex-col gap-3">
-              {parsed.competitors.map((c) => (
-                <div key={c.name}>
-                  <ConfidenceTag
-                    label={c.name}
-                    confidence={c.confidence}
-                  />
-                  <SourceLinks sources={c.sources} />
-                </div>
-              ))}
-            </div>
-          </Section>
-
-          <Section title="Partnerships & Associations">
-            <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {parsed.partnerships_or_associations.map((a) => (
-                <div key={a.entity} className="py-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm text-zinc-900 dark:text-zinc-100">
-                        {a.entity}
-                      </span>
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                        {a.type}
-                      </span>
+                <div
+                  className={`grid transition-[grid-template-rows] duration-200 ease-out ${isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
+                >
+                  <div className="overflow-hidden">
+                    <div className="border-t border-zinc-100 px-5 pb-5 pt-4 dark:border-zinc-800">
+                      <div className="flex flex-col gap-4">
+                        {group.questions.map((q, qIndex) => (
+                          <div key={qIndex} className="flex flex-col gap-1.5">
+                            <div className="flex items-start justify-between gap-3">
+                              <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                                {qIndex + 1}. {q.question}
+                              </p>
+                              <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                                {Math.round(q.confidence * 100)}%
+                              </span>
+                            </div>
+                            <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                              {q.answer}
+                            </p>
+                            <SourceLinks sources={q.sources} />
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <ConfidenceBar confidence={a.confidence} />
                   </div>
-                  <SourceLinks sources={a.sources} />
                 </div>
-              ))}
-            </div>
-          </Section>
-
-          {parsed.common_criticisms.length > 0 && (
-            <Section title="Common Criticisms">
-              <div className="flex flex-col gap-3">
-                {parsed.common_criticisms.map((c) => (
-                  <div key={c.theme}>
-                    <ConfidenceTag
-                      label={c.theme}
-                      confidence={c.confidence}
-                      variant="warning"
-                    />
-                    <SourceLinks sources={c.sources} />
-                  </div>
-                ))}
               </div>
-            </Section>
-          )}
+            );
+          })}
 
           <div className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
             <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -261,87 +267,6 @@ export function FootprintView({
         </div>
       )}
     </div>
-  );
-}
-
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-      <h4 className="mb-3 text-sm font-medium text-zinc-700 dark:text-zinc-300">
-        {title}
-      </h4>
-      {children}
-    </div>
-  );
-}
-
-function AuthorityBadge({
-  assessment,
-}: {
-  assessment: {
-    strength: string;
-    justification: string;
-    sources: Source[];
-  };
-}) {
-  const colors: Record<string, string> = {
-    high: "bg-green-50 border-green-200 text-green-700 dark:bg-green-950 dark:border-green-800 dark:text-green-400",
-    medium:
-      "bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-950 dark:border-yellow-800 dark:text-yellow-400",
-    low: "bg-red-50 border-red-200 text-red-700 dark:bg-red-950 dark:border-red-800 dark:text-red-400",
-  };
-
-  return (
-    <div
-      className={`rounded-2xl border p-5 ${colors[assessment.strength] ?? colors.low}`}
-    >
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-sm font-semibold">Authority:</span>
-        <span className="rounded-full bg-white/50 px-2.5 py-0.5 text-xs font-bold uppercase dark:bg-black/20">
-          {assessment.strength}
-        </span>
-      </div>
-      <p className="text-sm">{assessment.justification}</p>
-      <SourceLinks sources={assessment.sources} />
-    </div>
-  );
-}
-
-function ConfidenceTag({
-  label,
-  confidence,
-  variant = "default",
-}: {
-  label: string;
-  confidence: number;
-  variant?: "default" | "warning";
-}) {
-  const opacity = Math.max(0.4, confidence);
-  const bg =
-    variant === "warning"
-      ? "bg-amber-50 dark:bg-amber-950"
-      : "bg-zinc-100 dark:bg-zinc-800";
-  const text =
-    variant === "warning"
-      ? "text-amber-700 dark:text-amber-400"
-      : "text-zinc-700 dark:text-zinc-300";
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm ${bg} ${text}`}
-      style={{ opacity }}
-    >
-      {label}
-      <span className="text-xs opacity-60">
-        {Math.round(confidence * 100)}%
-      </span>
-    </span>
   );
 }
 

@@ -6,10 +6,11 @@ import { createClient } from "@/lib/supabase/server";
 import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/checklist-defaults";
 import OpenAI from "openai";
 import {
-  buildFootprintPromptV2,
-  FOOTPRINT_JSON_SCHEMA_V2,
+  buildGroupPrompt,
+  GROUP_JSON_SCHEMA,
+  FOOTPRINT_GROUPS,
 } from "@/lib/footprint-prompt";
-import type { FootprintResponseV2 } from "@/lib/footprint-prompt";
+import type { GroupResponse, FootprintFullResponse } from "@/lib/footprint-prompt";
 
 export async function createProject(formData: FormData) {
   const supabase = await createClient();
@@ -445,7 +446,6 @@ export async function requestFootprint(projectId: string) {
   }
 
   const MODEL = "gpt-5.2";
-    const prompt = buildFootprintPromptV2(companyName, prodUrl);
 
   const { data: request, error: insertError } = await supabase
     .from("footprint_requests")
@@ -466,48 +466,85 @@ export async function requestFootprint(projectId: string) {
   try {
     const openai = new OpenAI({ apiKey });
 
-    const response = await openai.responses.create({
-      model: MODEL,
-      tools: [{ type: "web_search" }],
-      input: prompt,
-      text: {
-        format: FOOTPRINT_JSON_SCHEMA_V2,
-      },
-    });
+    const groupResults = await Promise.all(
+      FOOTPRINT_GROUPS.map(async (group) => {
+        const prompt = buildGroupPrompt(group, companyName, prodUrl);
+        try {
+          const response = await openai.responses.create({
+            model: MODEL,
+            tools: [{ type: "web_search" }],
+            input: prompt,
+            text: { format: GROUP_JSON_SCHEMA },
+          });
 
-    const rawContent = response.output_text;
-    if (!rawContent) {
+          const rawContent = response.output_text;
+          if (!rawContent) {
+            return { groupId: group.id, error: "Empty response", raw: null, parsed: null };
+          }
+
+          const parsed = JSON.parse(rawContent) as GroupResponse;
+          return { groupId: group.id, error: null, raw: rawContent, parsed };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          return { groupId: group.id, error: message, raw: null, parsed: null };
+        }
+      })
+    );
+
+    const failed = groupResults.filter((r) => r.error !== null);
+    const succeeded = groupResults.filter((r) => r.parsed !== null);
+
+    if (succeeded.length === 0) {
+      const errorSummary = failed
+        .map((f) => `${f.groupId}: ${f.error}`)
+        .join("; ");
       await supabase
         .from("footprint_requests")
         .update({
           status: "error",
-          error_message: "Empty response from model",
+          error_message: `All 10 groups failed. ${errorSummary}`,
         })
         .eq("id", request.id);
-      return { error: "Empty response from model" };
+      return { error: "All analysis groups failed. Please try again." };
     }
 
-    let parsed: FootprintResponseV2;
-    try {
-      parsed = JSON.parse(rawContent) as FootprintResponseV2;
-    } catch {
-      await supabase
-        .from("footprint_requests")
-        .update({
-          status: "error",
-          raw_response: rawContent,
-          error_message: "Invalid JSON in model response",
-        })
-        .eq("id", request.id);
-      return { error: "Model returned invalid JSON" };
-    }
+    const fullResponse: FootprintFullResponse = {
+      groups: FOOTPRINT_GROUPS.map((group) => {
+        const result = groupResults.find((r) => r.groupId === group.id);
+        if (result?.parsed) {
+          return result.parsed;
+        }
+        return {
+          summary: "This group could not be analyzed. Please re-analyze.",
+          questions: group.questions.map((q) => ({
+            question: q,
+            answer: "Analysis failed for this question.",
+            confidence: 0,
+            sources: [],
+          })),
+        };
+      }),
+    };
+
+    const rawResponses = Object.fromEntries(
+      groupResults
+        .filter((r) => r.raw !== null)
+        .map((r) => [r.groupId, r.raw])
+    );
+
+    const status = failed.length > 0 ? "completed" : "completed";
+    const errorNote =
+      failed.length > 0
+        ? `${failed.length} of 10 groups failed: ${failed.map((f) => f.groupId).join(", ")}`
+        : null;
 
     await supabase
       .from("footprint_requests")
       .update({
-        status: "completed",
-        raw_response: rawContent,
-        parsed_response: parsed,
+        status,
+        raw_response: JSON.stringify(rawResponses),
+        parsed_response: fullResponse,
+        error_message: errorNote,
       })
       .eq("id", request.id);
 
