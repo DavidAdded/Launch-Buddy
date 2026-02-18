@@ -1,63 +1,77 @@
-export function buildFootprintPrompt(
-  companyName: string,
-  productionUrl: string
-): string {
-  return `Perform a thorough digital footprint and authority analysis for the following company.
+export type Source = {
+  url: string;
+  title: string;
+  type: "company_site" | "press" | "directory" | "review" | "social" | "other";
+};
 
-Company: ${companyName}
-Website: ${productionUrl}
-
-Instructions:
-
-1. Browse the company's production website at ${productionUrl}. Examine the homepage, about page, and any key product/service pages to understand what the company does, how it positions itself, and what claims it makes.
-
-2. Search the web for "${companyName}" to find third-party references: press coverage, industry directories, review sites, social media presence, partnership announcements, and any notable mentions or criticisms.
-
-3. Cross-reference what the company says about itself on its website with what independent sources say. Prioritize verifiable, third-party information over self-reported claims.
-
-4. For each field in your response:
-   - "known_for": List the primary themes, products, or services this company is publicly recognized for. Base this on both website content and external mentions.
-   - "industry_context": Identify the primary industry and any secondary verticals based on the website content and how third parties categorize the company.
-   - "competitors": Name direct competitors found through industry comparisons, review sites, or "alternatives to" searches. Only include competitors you can verify exist.
-   - "partnerships_or_associations": List verified partnerships, integrations, or organizational memberships found on the website or in press releases.
-   - "common_criticisms": Note recurring negative themes from reviews, forums, or press. If none are found, return an empty array.
-   - "overall_authority_assessment": Rate the company's digital authority as "low", "medium", or "high" based on the totality of evidence — website quality, third-party coverage, backlink presence, social proof, and industry recognition. Provide a specific justification citing what you found.
-
-5. Confidence scoring:
-   - 0.9-1.0: Verified by multiple independent sources
-   - 0.7-0.8: Found in at least one credible third-party source
-   - 0.5-0.6: Mentioned on the company's own website but not independently verified
-   - 0.3-0.4: Inferred from indirect evidence
-   - Below 0.3: Do not include — the information is too uncertain
-
-6. Quality rules:
-   - Never fabricate information. If you cannot find data for a field, return an empty array or state "Insufficient data" in the justification.
-   - Do not speculate beyond what is publicly verifiable.
-   - Prefer specificity over vagueness (e.g., "enterprise cloud security" over "technology").`;
-}
-
-export type FootprintResponse = {
-  known_for: { theme: string; confidence: number }[];
+export type FootprintResponseV2 = {
+  known_for: { theme: string; confidence: number; sources: Source[] }[];
   industry_context: {
     primary: string;
-    secondary: string[];
+    secondary: { label: string; confidence: number; sources: Source[] }[];
   };
-  competitors: { name: string; confidence: number }[];
+  competitors: { name: string; confidence: number; sources: Source[] }[];
   partnerships_or_associations: {
     entity: string;
     type: "company" | "organization" | "technology" | "other";
     confidence: number;
+    sources: Source[];
   }[];
-  common_criticisms: { theme: string; confidence: number }[];
+  common_criticisms: { theme: string; confidence: number; sources: Source[] }[];
   overall_authority_assessment: {
     strength: "low" | "medium" | "high";
     justification: string;
+    sources: Source[];
   };
 };
 
-export const FOOTPRINT_JSON_SCHEMA = {
+export function buildFootprintPromptV2(
+  companyName: string,
+  productionUrl: string
+): string {
+  return `You are performing a digital footprint & authority analysis.
+
+Company: ${companyName}
+Website: ${productionUrl}
+
+OUTPUT RULES
+- Return ONLY valid JSON matching the schema.
+- Every non-empty item MUST include at least 1 source with a URL.
+- If you cannot provide a real source URL, do not include the item.
+- No guessing, no fabrication.
+
+PROCESS
+1) Browse ${productionUrl}: homepage, about, key service/product pages.
+2) Web search "${companyName}" plus queries for reviews, alternatives/competitors, partnerships/integrations.
+3) Cross-check self-claims vs third-party mentions. Prefer third-party.
+
+CONFIDENCE
+- 0.9–1.0: multiple independent sources
+- 0.7–0.8: one credible third-party source
+- 0.5–0.6: only company site
+- 0.3–0.4: indirect inference (rare)
+- <0.3: omit
+
+RETURN JSON ONLY (schema enforced).`;
+}
+
+const sourceSchema = {
+  type: "object",
+  properties: {
+    url: { type: "string" },
+    title: { type: "string" },
+    type: {
+      type: "string",
+      enum: ["company_site", "press", "directory", "review", "social", "other"],
+    },
+  },
+  required: ["url", "title", "type"],
+  additionalProperties: false,
+} as const;
+
+export const FOOTPRINT_JSON_SCHEMA_V2 = {
   type: "json_schema" as const,
-  name: "digital_footprint",
+  name: "digital_footprint_v2",
   strict: true,
   schema: {
     type: "object",
@@ -69,8 +83,9 @@ export const FOOTPRINT_JSON_SCHEMA = {
           properties: {
             theme: { type: "string" },
             confidence: { type: "number" },
+            sources: { type: "array", items: sourceSchema },
           },
-          required: ["theme", "confidence"],
+          required: ["theme", "confidence", "sources"],
           additionalProperties: false,
         },
       },
@@ -80,7 +95,16 @@ export const FOOTPRINT_JSON_SCHEMA = {
           primary: { type: "string" },
           secondary: {
             type: "array",
-            items: { type: "string" },
+            items: {
+              type: "object",
+              properties: {
+                label: { type: "string" },
+                confidence: { type: "number" },
+                sources: { type: "array", items: sourceSchema },
+              },
+              required: ["label", "confidence", "sources"],
+              additionalProperties: false,
+            },
           },
         },
         required: ["primary", "secondary"],
@@ -93,8 +117,9 @@ export const FOOTPRINT_JSON_SCHEMA = {
           properties: {
             name: { type: "string" },
             confidence: { type: "number" },
+            sources: { type: "array", items: sourceSchema },
           },
-          required: ["name", "confidence"],
+          required: ["name", "confidence", "sources"],
           additionalProperties: false,
         },
       },
@@ -109,8 +134,9 @@ export const FOOTPRINT_JSON_SCHEMA = {
               enum: ["company", "organization", "technology", "other"],
             },
             confidence: { type: "number" },
+            sources: { type: "array", items: sourceSchema },
           },
-          required: ["entity", "type", "confidence"],
+          required: ["entity", "type", "confidence", "sources"],
           additionalProperties: false,
         },
       },
@@ -121,8 +147,9 @@ export const FOOTPRINT_JSON_SCHEMA = {
           properties: {
             theme: { type: "string" },
             confidence: { type: "number" },
+            sources: { type: "array", items: sourceSchema },
           },
-          required: ["theme", "confidence"],
+          required: ["theme", "confidence", "sources"],
           additionalProperties: false,
         },
       },
@@ -134,8 +161,9 @@ export const FOOTPRINT_JSON_SCHEMA = {
             enum: ["low", "medium", "high"],
           },
           justification: { type: "string" },
+          sources: { type: "array", items: sourceSchema },
         },
-        required: ["strength", "justification"],
+        required: ["strength", "justification", "sources"],
         additionalProperties: false,
       },
     },

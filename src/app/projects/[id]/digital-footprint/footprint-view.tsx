@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { requestFootprint } from "../../actions";
-import type { FootprintResponse } from "@/lib/footprint-prompt";
+import type { FootprintResponseV2, Source } from "@/lib/footprint-prompt";
 
 type FootprintRequest = {
   id: string;
@@ -10,7 +10,7 @@ type FootprintRequest = {
   company_name: string;
   status: string;
   error_message: string | null;
-  parsed_response: FootprintResponse | null;
+  parsed_response: FootprintResponseV2 | null;
   created_at: string;
 };
 
@@ -163,13 +163,15 @@ export function FootprintView({
           <AuthorityBadge assessment={parsed.overall_authority_assessment} />
 
           <Section title="Known For">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-3">
               {parsed.known_for.map((item) => (
-                <ConfidenceTag
-                  key={item.theme}
-                  label={item.theme}
-                  confidence={item.confidence}
-                />
+                <div key={item.theme}>
+                  <ConfidenceTag
+                    label={item.theme}
+                    confidence={item.confidence}
+                  />
+                  <SourceLinks sources={item.sources} />
+                </div>
               ))}
             </div>
           </Section>
@@ -179,27 +181,34 @@ export function FootprintView({
               {parsed.industry_context.primary}
             </p>
             {parsed.industry_context.secondary.length > 0 && (
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-col gap-2">
                 {parsed.industry_context.secondary.map((s) => (
-                  <span
-                    key={s}
-                    className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                  >
-                    {s}
-                  </span>
+                  <div key={s.label}>
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                        {s.label}
+                      </span>
+                      <span className="text-xs text-zinc-400 dark:text-zinc-500">
+                        {Math.round(s.confidence * 100)}%
+                      </span>
+                    </div>
+                    <SourceLinks sources={s.sources} />
+                  </div>
                 ))}
               </div>
             )}
           </Section>
 
           <Section title="Competitors">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-3">
               {parsed.competitors.map((c) => (
-                <ConfidenceTag
-                  key={c.name}
-                  label={c.name}
-                  confidence={c.confidence}
-                />
+                <div key={c.name}>
+                  <ConfidenceTag
+                    label={c.name}
+                    confidence={c.confidence}
+                  />
+                  <SourceLinks sources={c.sources} />
+                </div>
               ))}
             </div>
           </Section>
@@ -207,19 +216,19 @@ export function FootprintView({
           <Section title="Partnerships & Associations">
             <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {parsed.partnerships_or_associations.map((a) => (
-                <div
-                  key={a.entity}
-                  className="flex items-center justify-between py-2"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-zinc-900 dark:text-zinc-100">
-                      {a.entity}
-                    </span>
-                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                      {a.type}
-                    </span>
+                <div key={a.entity} className="py-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-zinc-900 dark:text-zinc-100">
+                        {a.entity}
+                      </span>
+                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                        {a.type}
+                      </span>
+                    </div>
+                    <ConfidenceBar confidence={a.confidence} />
                   </div>
-                  <ConfidenceBar confidence={a.confidence} />
+                  <SourceLinks sources={a.sources} />
                 </div>
               ))}
             </div>
@@ -227,14 +236,16 @@ export function FootprintView({
 
           {parsed.common_criticisms.length > 0 && (
             <Section title="Common Criticisms">
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-col gap-3">
                 {parsed.common_criticisms.map((c) => (
-                  <ConfidenceTag
-                    key={c.theme}
-                    label={c.theme}
-                    confidence={c.confidence}
-                    variant="warning"
-                  />
+                  <div key={c.theme}>
+                    <ConfidenceTag
+                      label={c.theme}
+                      confidence={c.confidence}
+                      variant="warning"
+                    />
+                    <SourceLinks sources={c.sources} />
+                  </div>
                 ))}
               </div>
             </Section>
@@ -273,7 +284,11 @@ function Section({
 function AuthorityBadge({
   assessment,
 }: {
-  assessment: { strength: string; justification: string };
+  assessment: {
+    strength: string;
+    justification: string;
+    sources: Source[];
+  };
 }) {
   const colors: Record<string, string> = {
     high: "bg-green-50 border-green-200 text-green-700 dark:bg-green-950 dark:border-green-800 dark:text-green-400",
@@ -293,6 +308,7 @@ function AuthorityBadge({
         </span>
       </div>
       <p className="text-sm">{assessment.justification}</p>
+      <SourceLinks sources={assessment.sources} />
     </div>
   );
 }
@@ -341,6 +357,39 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
       <span className="text-xs text-zinc-400 dark:text-zinc-500">
         {Math.round(confidence * 100)}%
       </span>
+    </div>
+  );
+}
+
+const sourceTypeLabels: Record<Source["type"], string> = {
+  company_site: "Company",
+  press: "Press",
+  directory: "Directory",
+  review: "Review",
+  social: "Social",
+  other: "Other",
+};
+
+function SourceLinks({ sources }: { sources: Source[] }) {
+  if (!sources || sources.length === 0) return null;
+
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+      {sources.map((src, i) => (
+        <a
+          key={`${src.url}-${i}`}
+          href={src.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-800 dark:text-blue-400 dark:decoration-blue-700 dark:hover:text-blue-300"
+          title={src.title}
+        >
+          <span className="rounded bg-zinc-100 px-1 py-0.5 text-[10px] font-medium text-zinc-500 no-underline dark:bg-zinc-800 dark:text-zinc-400">
+            {sourceTypeLabels[src.type] ?? src.type}
+          </span>
+          <span className="max-w-[200px] truncate">{src.title}</span>
+        </a>
+      ))}
     </div>
   );
 }

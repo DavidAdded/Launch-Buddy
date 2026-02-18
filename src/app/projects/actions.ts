@@ -6,10 +6,10 @@ import { createClient } from "@/lib/supabase/server";
 import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/checklist-defaults";
 import OpenAI from "openai";
 import {
-  buildFootprintPrompt,
-  FOOTPRINT_JSON_SCHEMA,
+  buildFootprintPromptV2,
+  FOOTPRINT_JSON_SCHEMA_V2,
 } from "@/lib/footprint-prompt";
-import type { FootprintResponse } from "@/lib/footprint-prompt";
+import type { FootprintResponseV2 } from "@/lib/footprint-prompt";
 
 export async function createProject(formData: FormData) {
   const supabase = await createClient();
@@ -445,7 +445,7 @@ export async function requestFootprint(projectId: string) {
   }
 
   const MODEL = "gpt-5.2";
-  const prompt = buildFootprintPrompt(companyName, prodUrl);
+    const prompt = buildFootprintPromptV2(companyName, prodUrl);
 
   const { data: request, error: insertError } = await supabase
     .from("footprint_requests")
@@ -471,7 +471,7 @@ export async function requestFootprint(projectId: string) {
       tools: [{ type: "web_search" }],
       input: prompt,
       text: {
-        format: FOOTPRINT_JSON_SCHEMA,
+        format: FOOTPRINT_JSON_SCHEMA_V2,
       },
     });
 
@@ -487,9 +487,9 @@ export async function requestFootprint(projectId: string) {
       return { error: "Empty response from model" };
     }
 
-    let parsed: FootprintResponse;
+    let parsed: FootprintResponseV2;
     try {
-      parsed = JSON.parse(rawContent) as FootprintResponse;
+      parsed = JSON.parse(rawContent) as FootprintResponseV2;
     } catch {
       await supabase
         .from("footprint_requests")
