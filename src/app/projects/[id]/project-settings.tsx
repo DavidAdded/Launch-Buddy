@@ -6,6 +6,7 @@ import { updateProject } from "../actions";
 type Project = {
   id: string;
   name: string;
+  company_name: string | null;
   staging_url: string | null;
   prod_url: string | null;
   figma_url: string | null;
@@ -27,6 +28,7 @@ export function ProjectSettings({
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState(project.name);
+  const [companyName, setCompanyName] = useState(project.company_name ?? "");
   const [stagingUrl, setStagingUrl] = useState(project.staging_url ?? "");
   const [prodUrl, setProdUrl] = useState(project.prod_url ?? "");
   const [figmaUrl, setFigmaUrl] = useState(project.figma_url ?? "");
@@ -35,6 +37,7 @@ export function ProjectSettings({
 
   function handleCancel() {
     setName(project.name);
+    setCompanyName(project.company_name ?? "");
     setStagingUrl(project.staging_url ?? "");
     setProdUrl(project.prod_url ?? "");
     setFigmaUrl(project.figma_url ?? "");
@@ -47,6 +50,7 @@ export function ProjectSettings({
   function handleSave() {
     const formData = new FormData();
     formData.set("name", name);
+    formData.set("company_name", companyName);
     formData.set("staging_url", stagingUrl);
     formData.set("prod_url", prodUrl);
     formData.set("figma_url", figmaUrl);
@@ -70,6 +74,7 @@ export function ProjectSettings({
 
     const formData = new FormData();
     formData.set("name", name);
+    formData.set("company_name", companyName);
     formData.set("staging_url", stagingUrl);
     formData.set("prod_url", prodUrl);
     formData.set("figma_url", figmaUrl);
@@ -93,6 +98,11 @@ export function ProjectSettings({
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
               {project.name}
             </h2>
+            {project.company_name && (
+              <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                {project.company_name}
+              </p>
+            )}
             <div className="mt-2 flex flex-col gap-1">
               {project.staging_url && (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -211,6 +221,23 @@ export function ProjectSettings({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <label
+            htmlFor="edit-company"
+            className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+          >
+            Company Name
+          </label>
+          <input
+            id="edit-company"
+            type="text"
+            value={companyName}
+            onChange={(e) => setCompanyName(e.target.value)}
+            placeholder="Used for Digital Footprint analysis"
             className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
           />
         </div>
