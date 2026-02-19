@@ -7,9 +7,15 @@ type ProfileFormProps = {
   firstName: string;
   lastName: string;
   email: string;
+  targetUserId?: string;
 };
 
-export function ProfileForm({ firstName, lastName, email }: ProfileFormProps) {
+export function ProfileForm({
+  firstName,
+  lastName,
+  email,
+  targetUserId,
+}: ProfileFormProps) {
   const [first, setFirst] = useState(firstName);
   const [last, setLast] = useState(lastName);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +31,7 @@ export function ProfileForm({ firstName, lastName, email }: ProfileFormProps) {
     formData.set("last_name", last);
 
     startTransition(async () => {
-      const result = await updateProfile(formData);
+      const result = await updateProfile(formData, targetUserId);
       if (result.error) {
         setError(result.error);
       } else {

@@ -97,6 +97,12 @@ export default async function AdminUsersPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    <Link
+                      href={`/admin/users/${profile.id}/profile`}
+                      className="cursor-pointer rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      Edit Profile
+                    </Link>
                     <FortnoxIdField userId={profile.id} fortnoxId={profile.fortnox_id ?? ""} />
                     <ScopeToggles userId={profile.id} scopes={Array.isArray(profile.scopes) ? profile.scopes : []} />
                     <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400">
@@ -145,6 +151,12 @@ export default async function AdminUsersPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    <Link
+                      href={`/admin/users/${profile.id}/profile`}
+                      className="cursor-pointer rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      Edit Profile
+                    </Link>
                     <FortnoxIdField userId={profile.id} fortnoxId={profile.fortnox_id ?? ""} />
                     <ScopeToggles userId={profile.id} scopes={Array.isArray(profile.scopes) ? profile.scopes : []} />
                     <DeleteUserButton userId={profile.id} isSelf={profile.id === user.id} />
