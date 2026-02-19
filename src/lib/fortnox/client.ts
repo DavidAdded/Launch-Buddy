@@ -1,6 +1,6 @@
 const FORTNOX_AUTH_URL = "https://apps.fortnox.se/oauth-v1/auth";
 const FORTNOX_TOKEN_URL = "https://apps.fortnox.se/oauth-v1/token";
-const FORTNOX_API_BASE = "https://api.fortnox.se/3";
+const FORTNOX_API_BASE = "https://api.fortnox.se";
 
 function getConfig() {
   const clientId = process.env.FORTNOX_CLIENT_ID;

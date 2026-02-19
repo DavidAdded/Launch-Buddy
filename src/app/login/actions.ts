@@ -17,7 +17,7 @@ export async function login(formData: FormData) {
   }
 
   revalidatePath("/", "layout");
-  redirect("/projects");
+  redirect("/");
 }
 
 export async function forgotPassword(formData: FormData) {
@@ -61,5 +61,5 @@ export async function resetPassword(formData: FormData) {
     return { error: error.message };
   }
 
-  redirect("/projects");
+  redirect("/");
 }

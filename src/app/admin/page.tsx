@@ -13,11 +13,12 @@ export default async function AdminPage() {
   if (!user) redirect("/login");
 
   const isAdmin = await getIsAdmin();
-  if (!isAdmin) redirect("/projects");
+  if (!isAdmin) redirect("/");
 
-  const { count: userCount } = await supabase
-    .from("profiles")
-    .select("*", { count: "exact", head: true });
+  const [{ count: userCount }, { count: customerCount }] = await Promise.all([
+    supabase.from("profiles").select("*", { count: "exact", head: true }),
+    supabase.from("customers").select("*", { count: "exact", head: true }),
+  ]);
 
   const cards: {
     title: string;
@@ -32,6 +33,13 @@ export default async function AdminPage() {
       href: "/admin/users",
       stat: `${userCount ?? 0} user${(userCount ?? 0) === 1 ? "" : "s"}`,
       icon: "users",
+    },
+    {
+      title: "Customers",
+      description: "Manage customer companies available on to-do items.",
+      href: "/admin/customers",
+      stat: `${customerCount ?? 0} customer${(customerCount ?? 0) === 1 ? "" : "s"}`,
+      icon: "customers",
     },
   ];
 
@@ -133,5 +141,32 @@ function CardIcon({ type }: { type: string }) {
       </svg>
     );
   }
+
+  if (type === "customers") {
+    return (
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="text-zinc-500 dark:text-zinc-400"
+      >
+        <path d="M3 21h18" />
+        <path d="M5 21V7l8-4 8 4v14" />
+        <path d="M9 9h.01" />
+        <path d="M9 13h.01" />
+        <path d="M9 17h.01" />
+        <path d="M15 9h.01" />
+        <path d="M15 13h.01" />
+        <path d="M15 17h.01" />
+      </svg>
+    );
+  }
+
   return null;
 }

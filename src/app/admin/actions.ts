@@ -115,3 +115,138 @@ export async function toggleUserScope(userId: string, scope: string, enabled: bo
   revalidatePath("/admin/users");
   return { success: true };
 }
+
+export async function updateUserFortnoxId(userId: string, fortnoxId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated" };
+  }
+
+  const isAdmin = await getIsAdmin();
+  if (!isAdmin) {
+    return { error: "Not authorized" };
+  }
+
+  const adminClient = createAdminClient();
+
+  const { error } = await adminClient
+    .from("profiles")
+    .update({ fortnox_id: fortnoxId.trim() || null })
+    .eq("id", userId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin/users");
+  return { success: true };
+}
+
+export async function createCustomer(formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated" };
+  }
+
+  const isAdmin = await getIsAdmin();
+  if (!isAdmin) {
+    return { error: "Not authorized" };
+  }
+
+  const name = (formData.get("name") as string)?.trim();
+  const fortnoxIdRaw = (formData.get("fortnox_id") as string | null) ?? null;
+  const fortnoxId = fortnoxIdRaw?.trim() ? fortnoxIdRaw.trim() : null;
+  if (!name) {
+    return { error: "Company name is required" };
+  }
+
+  const { error } = await supabase.from("customers").insert({
+    name,
+    fortnox_id: fortnoxId,
+    created_by: user.id,
+  });
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/customers");
+  revalidatePath("/todos");
+  return { success: true };
+}
+
+export async function updateCustomer(customerId: string, formData: FormData) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated" };
+  }
+
+  const isAdmin = await getIsAdmin();
+  if (!isAdmin) {
+    return { error: "Not authorized" };
+  }
+
+  const name = (formData.get("name") as string)?.trim();
+  const fortnoxIdRaw = (formData.get("fortnox_id") as string | null) ?? null;
+  const fortnoxId = fortnoxIdRaw?.trim() ? fortnoxIdRaw.trim() : null;
+  if (!name) {
+    return { error: "Company name is required" };
+  }
+
+  const { error } = await supabase
+    .from("customers")
+    .update({ name, fortnox_id: fortnoxId })
+    .eq("id", customerId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/customers");
+  revalidatePath("/todos");
+  return { success: true };
+}
+
+export async function deleteCustomer(customerId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated" };
+  }
+
+  const isAdmin = await getIsAdmin();
+  if (!isAdmin) {
+    return { error: "Not authorized" };
+  }
+
+  const { error } = await supabase
+    .from("customers")
+    .delete()
+    .eq("id", customerId);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/admin/customers");
+  revalidatePath("/todos");
+  return { success: true };
+}

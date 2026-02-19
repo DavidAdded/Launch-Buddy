@@ -6,6 +6,7 @@ import { Breadcrumbs } from "@/components/breadcrumbs";
 import { InviteUserForm } from "./invite-form";
 import { DeleteUserButton } from "./delete-button";
 import { ScopeToggles } from "./scope-toggles";
+import { FortnoxIdField } from "./fortnox-id-field";
 
 export default async function AdminUsersPage() {
   const supabase = await createClient();
@@ -16,11 +17,11 @@ export default async function AdminUsersPage() {
   if (!user) redirect("/login");
 
   const isAdmin = await getIsAdmin();
-  if (!isAdmin) redirect("/projects");
+  if (!isAdmin) redirect("/");
 
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("id, first_name, last_name, email, is_admin, scopes, updated_at")
+    .select("id, first_name, last_name, email, is_admin, scopes, fortnox_id, updated_at")
     .order("is_admin", { ascending: false })
     .order("email", { ascending: true });
 
@@ -96,6 +97,7 @@ export default async function AdminUsersPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    <FortnoxIdField userId={profile.id} fortnoxId={profile.fortnox_id ?? ""} />
                     <ScopeToggles userId={profile.id} scopes={Array.isArray(profile.scopes) ? profile.scopes : []} />
                     <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400">
                       Admin
@@ -143,6 +145,7 @@ export default async function AdminUsersPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-3">
+                    <FortnoxIdField userId={profile.id} fortnoxId={profile.fortnox_id ?? ""} />
                     <ScopeToggles userId={profile.id} scopes={Array.isArray(profile.scopes) ? profile.scopes : []} />
                     <DeleteUserButton userId={profile.id} isSelf={profile.id === user.id} />
                   </div>

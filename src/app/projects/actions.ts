@@ -12,6 +12,23 @@ import {
 } from "@/lib/footprint-prompt";
 import type { GroupResponse, FootprintFullResponse } from "@/lib/footprint-prompt";
 
+function parseOptionalBudgetHours(value: string | null) {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) {
+    return { value: null as number | null, error: null as string | null };
+  }
+
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return {
+      value: null as number | null,
+      error: "Project budget (hours) must be a number greater than or equal to 0",
+    };
+  }
+
+  return { value: parsed, error: null as string | null };
+}
+
 export async function createProject(formData: FormData) {
   const supabase = await createClient();
   const {
@@ -23,14 +40,23 @@ export async function createProject(formData: FormData) {
   }
 
   const name = formData.get("name") as string;
+  const customerId = formData.get("customer_id") as string;
   const stagingUrl = formData.get("staging_url") as string;
   const prodUrl = formData.get("prod_url") as string;
   const figmaUrl = formData.get("figma_url") as string;
   const webflowUrl = formData.get("webflow_url") as string;
+  const projectBudgetHoursInput = formData.get("project_budget_hours") as string;
 
   if (!name?.trim()) {
     redirect(
       "/projects/new?error=" + encodeURIComponent("Project name is required"),
+    );
+  }
+
+  const parsedBudget = parseOptionalBudgetHours(projectBudgetHoursInput);
+  if (parsedBudget.error) {
+    redirect(
+      "/projects/new?error=" + encodeURIComponent(parsedBudget.error),
     );
   }
 
@@ -39,10 +65,12 @@ export async function createProject(formData: FormData) {
     .insert({
       user_id: user.id,
       name: name.trim(),
+      customer_id: customerId?.trim() || null,
       staging_url: stagingUrl?.trim() || null,
       prod_url: prodUrl?.trim() || null,
       figma_url: figmaUrl?.trim() || null,
       webflow_url: webflowUrl?.trim() || null,
+      project_budget_hours: parsedBudget.value,
     })
     .select("id")
     .single();
@@ -66,15 +94,21 @@ export async function updateProject(projectId: string, formData: FormData) {
   }
 
   const name = formData.get("name") as string;
-  const companyName = formData.get("company_name") as string;
+  const customerId = formData.get("customer_id") as string;
   const stagingUrl = formData.get("staging_url") as string;
   const prodUrl = formData.get("prod_url") as string;
   const figmaUrl = formData.get("figma_url") as string;
   const webflowUrl = formData.get("webflow_url") as string;
+  const projectBudgetHoursInput = formData.get("project_budget_hours") as string;
   const isPublic = formData.get("is_public") === "true";
 
   if (!name?.trim()) {
     return { error: "Project name is required" };
+  }
+
+  const parsedBudget = parseOptionalBudgetHours(projectBudgetHoursInput);
+  if (parsedBudget.error) {
+    return { error: parsedBudget.error };
   }
 
   const { data: existing } = await supabase
@@ -91,11 +125,12 @@ export async function updateProject(projectId: string, formData: FormData) {
 
   const updatePayload: Record<string, unknown> = {
     name: name.trim(),
-    company_name: companyName?.trim() || null,
+    customer_id: customerId?.trim() || null,
     staging_url: stagingUrl?.trim() || null,
     prod_url: prodUrl?.trim() || null,
     figma_url: figmaUrl?.trim() || null,
     webflow_url: webflowUrl?.trim() || null,
+    project_budget_hours: parsedBudget.value,
   };
 
   if (isOwner) {
@@ -419,7 +454,7 @@ export async function requestFootprint(projectId: string) {
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, company_name, prod_url")
+    .select("id, customer_id, prod_url, customers(name)")
     .eq("id", projectId)
     .single();
 
@@ -427,9 +462,10 @@ export async function requestFootprint(projectId: string) {
     return { error: "Project not found" };
   }
 
-  const companyName = project.company_name;
+  const customer = project.customers as unknown as { name: string } | null;
+  const companyName = customer?.name;
   if (!companyName?.trim()) {
-    return { error: "Company name is required. Set it in project settings." };
+    return { error: "Company is required. Set it in project settings." };
   }
 
   const prodUrl = project.prod_url;

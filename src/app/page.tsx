@@ -37,6 +37,13 @@ export default async function HomePage() {
       visible: scopes.includes("projects"),
     },
     {
+      title: "To-do List",
+      description: "Manage your personal tasks and collaborate with shared to-dos.",
+      href: "/todos",
+      icon: "todos",
+      visible: scopes.includes("todos"),
+    },
+    {
       title: "Fortnox",
       description: "Manage invoices, customers, and accounting through Fortnox.",
       href: "/fortnox",
@@ -149,6 +156,15 @@ function HomeCardIcon({ type }: { type: string }) {
       <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
         <rect width="20" height="14" x="2" y="5" rx="2" />
         <path d="M2 10h20" />
+      </svg>
+    );
+  }
+
+  if (type === "todos") {
+    return (
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
+        <path d="m9 12 2 2 4-4" />
       </svg>
     );
   }

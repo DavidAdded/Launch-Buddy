@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { getIsAdmin } from "@/lib/admin";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 
 export default async function ProjectsPage() {
@@ -14,21 +13,25 @@ export default async function ProjectsPage() {
     redirect("/login");
   }
 
-  const [{ data: projects }, { data: profile }, isAdmin] = await Promise.all([
+  const [{ data: projects }, { data: profile }] = await Promise.all([
     supabase
       .from("projects")
-      .select("*")
+      .select("*, customers(name)")
       .order("created_at", { ascending: false }),
     supabase
       .from("profiles")
       .select("scopes")
       .eq("id", user.id)
       .single(),
-    getIsAdmin(),
   ]);
 
   const scopes: string[] = Array.isArray(profile?.scopes) ? profile.scopes : [];
   if (!scopes.includes("projects")) redirect("/");
+
+  function getCustomerName(project: Record<string, unknown>): string | null {
+    const c = project.customers as { name: string } | null;
+    return c?.name ?? null;
+  }
 
   const myProjects = (projects ?? []).filter((p) => p.user_id === user.id);
   const sharedProjects = (projects ?? []).filter((p) => p.user_id !== user.id);
@@ -47,14 +50,6 @@ export default async function ProjectsPage() {
             <span className="text-sm text-zinc-500 dark:text-zinc-400">
               {user.email}
             </span>
-            {isAdmin && (
-              <Link
-                href="/admin"
-                className="cursor-pointer rounded-full border border-zinc-200 px-4 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                Admin
-              </Link>
-            )}
             <Link
               href="/profile"
               className="cursor-pointer rounded-full border border-zinc-200 px-4 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
@@ -110,7 +105,17 @@ export default async function ProjectsPage() {
                     </span>
                   )}
                 </div>
+                {getCustomerName(project) && (
+                  <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                    {getCustomerName(project)}
+                  </p>
+                )}
                 <div className="mt-3 flex flex-col gap-1">
+                  {project.project_budget_hours !== null && (
+                    <p className="truncate text-sm text-zinc-500 dark:text-zinc-400">
+                      Budget: {project.project_budget_hours}h
+                    </p>
+                  )}
                   {project.staging_url && (
                     <p className="truncate text-sm text-zinc-500 dark:text-zinc-400">
                       Staging: {project.staging_url}
@@ -150,7 +155,17 @@ export default async function ProjectsPage() {
                       Shared
                     </span>
                   </div>
+                  {getCustomerName(project) && (
+                    <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
+                      {getCustomerName(project)}
+                    </p>
+                  )}
                   <div className="mt-3 flex flex-col gap-1">
+                    {project.project_budget_hours !== null && (
+                      <p className="truncate text-sm text-zinc-500 dark:text-zinc-400">
+                        Budget: {project.project_budget_hours}h
+                      </p>
+                    )}
                     {project.staging_url && (
                       <p className="truncate text-sm text-zinc-500 dark:text-zinc-400">
                         Staging: {project.staging_url}

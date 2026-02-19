@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 import { createProject } from "../actions";
 
 export default async function NewProjectPage({
@@ -7,6 +9,20 @@ export default async function NewProjectPage({
   searchParams: Promise<{ error?: string }>;
 }) {
   const { error } = await searchParams;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  const { data: customers } = await supabase
+    .from("customers")
+    .select("id, name")
+    .order("name");
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
@@ -52,6 +68,30 @@ export default async function NewProjectPage({
 
           <div className="flex flex-col gap-1.5">
             <label
+              htmlFor="customer_id"
+              className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+            >
+              Company
+              <span className="ml-1 text-zinc-400 dark:text-zinc-500">
+                (optional)
+              </span>
+            </label>
+            <select
+              id="customer_id"
+              name="customer_id"
+              className="cursor-pointer rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500"
+            >
+              <option value="">No company</option>
+              {(customers ?? []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label
               htmlFor="staging_url"
               className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
             >
@@ -85,6 +125,27 @@ export default async function NewProjectPage({
               type="url"
               className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
               placeholder="https://example.com"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="project_budget_hours"
+              className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+            >
+              Project Budget (Hours)
+              <span className="ml-1 text-zinc-400 dark:text-zinc-500">
+                (optional)
+              </span>
+            </label>
+            <input
+              id="project_budget_hours"
+              name="project_budget_hours"
+              type="number"
+              min="0"
+              step="0.25"
+              className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
+              placeholder="120"
             />
           </div>
 

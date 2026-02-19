@@ -6,9 +6,10 @@ import { updateProject } from "../actions";
 type Project = {
   id: string;
   name: string;
-  company_name: string | null;
+  customer_id: string | null;
   staging_url: string | null;
   prod_url: string | null;
+  project_budget_hours: number | null;
   figma_url: string | null;
   webflow_url: string | null;
   is_public: boolean;
@@ -16,30 +17,43 @@ type Project = {
   created_at: string;
 };
 
+type Customer = {
+  id: string;
+  name: string;
+};
+
 export function ProjectSettings({
   project,
   isOwner,
+  customers,
+  customerName,
 }: {
   project: Project;
   isOwner: boolean;
+  customers: Customer[];
+  customerName: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState(project.name);
-  const [companyName, setCompanyName] = useState(project.company_name ?? "");
+  const [customerId, setCustomerId] = useState(project.customer_id ?? "");
   const [stagingUrl, setStagingUrl] = useState(project.staging_url ?? "");
   const [prodUrl, setProdUrl] = useState(project.prod_url ?? "");
+  const [projectBudgetHours, setProjectBudgetHours] = useState(
+    project.project_budget_hours?.toString() ?? "",
+  );
   const [figmaUrl, setFigmaUrl] = useState(project.figma_url ?? "");
   const [webflowUrl, setWebflowUrl] = useState(project.webflow_url ?? "");
   const [isPublic, setIsPublic] = useState(project.is_public);
 
   function handleCancel() {
     setName(project.name);
-    setCompanyName(project.company_name ?? "");
+    setCustomerId(project.customer_id ?? "");
     setStagingUrl(project.staging_url ?? "");
     setProdUrl(project.prod_url ?? "");
+    setProjectBudgetHours(project.project_budget_hours?.toString() ?? "");
     setFigmaUrl(project.figma_url ?? "");
     setWebflowUrl(project.webflow_url ?? "");
     setIsPublic(project.is_public);
@@ -50,9 +64,10 @@ export function ProjectSettings({
   function handleSave() {
     const formData = new FormData();
     formData.set("name", name);
-    formData.set("company_name", companyName);
+    formData.set("customer_id", customerId);
     formData.set("staging_url", stagingUrl);
     formData.set("prod_url", prodUrl);
+    formData.set("project_budget_hours", projectBudgetHours);
     formData.set("figma_url", figmaUrl);
     formData.set("webflow_url", webflowUrl);
     formData.set("is_public", isPublic ? "true" : "false");
@@ -74,9 +89,10 @@ export function ProjectSettings({
 
     const formData = new FormData();
     formData.set("name", name);
-    formData.set("company_name", companyName);
+    formData.set("customer_id", customerId);
     formData.set("staging_url", stagingUrl);
     formData.set("prod_url", prodUrl);
+    formData.set("project_budget_hours", projectBudgetHours);
     formData.set("figma_url", figmaUrl);
     formData.set("webflow_url", webflowUrl);
     formData.set("is_public", newValue ? "true" : "false");
@@ -98,9 +114,9 @@ export function ProjectSettings({
             <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
               {project.name}
             </h2>
-            {project.company_name && (
+            {customerName && (
               <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">
-                {project.company_name}
+                {customerName}
               </p>
             )}
             <div className="mt-2 flex flex-col gap-1">
@@ -128,6 +144,11 @@ export function ProjectSettings({
                   >
                     {project.prod_url}
                   </a>
+                </p>
+              )}
+              {project.project_budget_hours !== null && (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Budget: {project.project_budget_hours} hours
                 </p>
               )}
               {project.figma_url && (
@@ -230,16 +251,21 @@ export function ProjectSettings({
             htmlFor="edit-company"
             className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
           >
-            Company Name
+            Company
           </label>
-          <input
+          <select
             id="edit-company"
-            type="text"
-            value={companyName}
-            onChange={(e) => setCompanyName(e.target.value)}
-            placeholder="Used for Digital Footprint analysis"
-            className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
-          />
+            value={customerId}
+            onChange={(e) => setCustomerId(e.target.value)}
+            className="cursor-pointer rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500"
+          >
+            <option value="">No company</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
@@ -290,6 +316,25 @@ export function ProjectSettings({
               value={figmaUrl}
               onChange={(e) => setFigmaUrl(e.target.value)}
               placeholder="https://figma.com/file/..."
+              className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label
+              htmlFor="edit-project-budget"
+              className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+            >
+              Project Budget (Hours)
+            </label>
+            <input
+              id="edit-project-budget"
+              type="number"
+              min="0"
+              step="0.25"
+              value={projectBudgetHours}
+              onChange={(e) => setProjectBudgetHours(e.target.value)}
+              placeholder="120"
               className="rounded-lg border border-zinc-200 bg-white px-3.5 py-2.5 text-sm text-zinc-900 outline-none transition-colors placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-500"
             />
           </div>

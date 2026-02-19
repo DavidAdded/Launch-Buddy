@@ -22,13 +22,15 @@ export default async function DigitalFootprintPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, company_name, prod_url")
+    .select("id, name, customer_id, prod_url, customers(name)")
     .eq("id", id)
     .single();
 
   if (!project) {
     redirect("/projects");
   }
+
+  const customerName = (project.customers as unknown as { name: string } | null)?.name ?? null;
 
   const { data: requests } = await supabase
     .from("footprint_requests")
@@ -72,7 +74,7 @@ export default async function DigitalFootprintPage({
       <main className="mx-auto max-w-5xl px-6 py-10">
         <FootprintView
           projectId={id}
-          companyName={project.company_name}
+          companyName={customerName}
           prodUrl={project.prod_url}
           requests={requests ?? []}
         />

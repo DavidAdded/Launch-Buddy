@@ -5,6 +5,7 @@ import { toggleUserScope } from "../actions";
 
 const ALL_SCOPES = [
   { key: "projects", label: "Projects" },
+  { key: "todos", label: "To-do List" },
   { key: "fortnox", label: "Fortnox" },
 ] as const;
 

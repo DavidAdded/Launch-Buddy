@@ -6,6 +6,7 @@ create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
+  project_budget_hours numeric,
   staging_url text,
   prod_url text,
   figma_url text,

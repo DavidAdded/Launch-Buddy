@@ -26,7 +26,7 @@ export default async function ProjectDetailPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("*")
+    .select("*, customers(name)")
     .eq("id", id)
     .single();
 
@@ -34,26 +34,32 @@ export default async function ProjectDetailPage({
     redirect("/projects");
   }
 
+  const customerName = (project.customers as unknown as { name: string } | null)?.name ?? null;
+
   const isOwner = project.user_id === user.id;
 
-  const { count: fileCount } = await supabase
-    .from("project_files")
-    .select("*", { count: "exact", head: true })
-    .eq("project_id", id);
-
-  const { data: checklistItems } = await supabase
-    .from("checklist_items")
-    .select("id, checked, irrelevant")
-    .eq("project_id", id);
+  const [{ count: fileCount }, { data: checklistItems }, { count: footprintCount }, { data: customers }] = await Promise.all([
+    supabase
+      .from("project_files")
+      .select("*", { count: "exact", head: true })
+      .eq("project_id", id),
+    supabase
+      .from("checklist_items")
+      .select("id, checked, irrelevant")
+      .eq("project_id", id),
+    supabase
+      .from("footprint_requests")
+      .select("*", { count: "exact", head: true })
+      .eq("project_id", id),
+    supabase
+      .from("customers")
+      .select("id, name")
+      .order("name"),
+  ]);
 
   const totalChecklist = checklistItems?.length ?? 0;
   const doneChecklist =
     checklistItems?.filter((i) => i.checked || i.irrelevant).length ?? 0;
-
-  const { count: footprintCount } = await supabase
-    .from("footprint_requests")
-    .select("*", { count: "exact", head: true })
-    .eq("project_id", id);
 
   const deleteProjectWithId = deleteProject.bind(null, id);
 
@@ -136,7 +142,7 @@ export default async function ProjectDetailPage({
 
         <div className="mb-10 flex items-start justify-between">
           <div className="flex-1">
-            <ProjectSettings project={project} isOwner={isOwner} />
+            <ProjectSettings project={project} isOwner={isOwner} customers={customers ?? []} customerName={customerName} />
           </div>
           {isOwner && (
             <form action={deleteProjectWithId} className="ml-4 shrink-0">
