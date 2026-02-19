@@ -20,28 +20,6 @@ export async function login(formData: FormData) {
   redirect("/projects");
 }
 
-export async function signup(formData: FormData) {
-  const supabase = await createClient();
-
-  const { data, error } = await supabase.auth.signUp({
-    email: formData.get("email") as string,
-    password: formData.get("password") as string,
-  });
-
-  if (error) {
-    redirect(`/login?error=${encodeURIComponent(error.message)}`);
-  }
-
-  if (data.user?.identities?.length === 0) {
-    redirect("/login?error=" + encodeURIComponent("Account already exists"));
-  }
-
-  redirect(
-    "/login?message=" +
-      encodeURIComponent("Check your email to confirm your account")
-  );
-}
-
 export async function forgotPassword(formData: FormData) {
   const supabase = await createClient();
   const email = formData.get("email") as string;

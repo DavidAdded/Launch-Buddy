@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getIsAdmin } from "@/lib/admin";
+import { Breadcrumbs } from "@/components/breadcrumbs";
 
 export default async function ProjectsPage() {
   const supabase = await createClient();
@@ -12,10 +14,21 @@ export default async function ProjectsPage() {
     redirect("/login");
   }
 
-  const { data: projects } = await supabase
-    .from("projects")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const [{ data: projects }, { data: profile }, isAdmin] = await Promise.all([
+    supabase
+      .from("projects")
+      .select("*")
+      .order("created_at", { ascending: false }),
+    supabase
+      .from("profiles")
+      .select("scopes")
+      .eq("id", user.id)
+      .single(),
+    getIsAdmin(),
+  ]);
+
+  const scopes: string[] = Array.isArray(profile?.scopes) ? profile.scopes : [];
+  if (!scopes.includes("projects")) redirect("/");
 
   const myProjects = (projects ?? []).filter((p) => p.user_id === user.id);
   const sharedProjects = (projects ?? []).filter((p) => p.user_id !== user.id);
@@ -24,13 +37,24 @@ export default async function ProjectsPage() {
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <h1 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Launch Buddy
-          </h1>
+          <Breadcrumbs
+            items={[
+              { label: "Home", href: "/" },
+              { label: "Projects" },
+            ]}
+          />
           <div className="flex items-center gap-4">
             <span className="text-sm text-zinc-500 dark:text-zinc-400">
               {user.email}
             </span>
+            {isAdmin && (
+              <Link
+                href="/admin"
+                className="cursor-pointer rounded-full border border-zinc-200 px-4 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Admin
+              </Link>
+            )}
             <Link
               href="/profile"
               className="cursor-pointer rounded-full border border-zinc-200 px-4 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"

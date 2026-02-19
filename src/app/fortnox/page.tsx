@@ -1,42 +1,33 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { FootprintView } from "./footprint-view";
 import { Breadcrumbs } from "@/components/breadcrumbs";
+import { FortnoxClient } from "./fortnox-client";
 
-export default async function DigitalFootprintPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
+interface FortnoxPageProps {
+  searchParams: Promise<{ connected?: string; error?: string }>;
+}
 
+export default async function FortnoxPage({ searchParams }: FortnoxPageProps) {
+  const params = await searchParams;
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/login");
-  }
+  if (!user) redirect("/login");
 
-  const { data: project } = await supabase
-    .from("projects")
-    .select("id, name, company_name, prod_url")
-    .eq("id", id)
-    .single();
+  const [{ data: profile }, { data: tokenRow }] = await Promise.all([
+    supabase.from("profiles").select("scopes").eq("id", user.id).single(),
+    supabase.from("fortnox_tokens").select("id").eq("user_id", user.id).single(),
+  ]);
 
-  if (!project) {
-    redirect("/projects");
-  }
+  const scopes: string[] = Array.isArray(profile?.scopes) ? profile.scopes : [];
+  if (!scopes.includes("fortnox")) redirect("/");
 
-  const { data: requests } = await supabase
-    .from("footprint_requests")
-    .select(
-      "id, model_name, company_name, status, error_message, parsed_response, created_at"
-    )
-    .eq("project_id", id)
-    .order("created_at", { ascending: false });
+  const isConnected = !!tokenRow;
+  const errorParam = params.error ?? null;
+  const justConnected = params.connected === "true";
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
@@ -45,9 +36,7 @@ export default async function DigitalFootprintPage({
           <Breadcrumbs
             items={[
               { label: "Home", href: "/" },
-              { label: "Projects", href: "/projects" },
-              { label: project.name, href: `/projects/${id}` },
-              { label: "Digital Footprint" },
+              { label: "Fortnox" },
             ]}
           />
           <div className="flex items-center gap-3">
@@ -70,11 +59,10 @@ export default async function DigitalFootprintPage({
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-10">
-        <FootprintView
-          projectId={id}
-          companyName={project.company_name}
-          prodUrl={project.prod_url}
-          requests={requests ?? []}
+        <FortnoxClient
+          isConnected={isConnected}
+          error={errorParam}
+          justConnected={justConnected}
         />
       </main>
     </div>

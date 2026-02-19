@@ -52,6 +52,7 @@ export default async function FilesPage({
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <Breadcrumbs
             items={[
+              { label: "Home", href: "/" },
               { label: "Projects", href: "/projects" },
               { label: project.name, href: `/projects/${id}` },
               { label: "Files" },
