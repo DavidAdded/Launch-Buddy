@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getIsAdmin } from "@/lib/admin";
+import { getSiteUrl } from "@/lib/site-url";
 
 export async function inviteUser(formData: FormData) {
   const supabase = await createClient();
@@ -26,9 +27,10 @@ export async function inviteUser(formData: FormData) {
   }
 
   const adminClient = createAdminClient();
+  const siteUrl = getSiteUrl();
 
   const { error } = await adminClient.auth.admin.inviteUserByEmail(email, {
-    redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/callback?next=/auth/reset-password`,
+    redirectTo: `${siteUrl}/auth/callback?next=/auth/reset-password`,
   });
 
   if (error) {

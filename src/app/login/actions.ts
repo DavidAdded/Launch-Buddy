@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { getSiteUrl } from "@/lib/site-url";
 
 export async function login(formData: FormData) {
   const supabase = await createClient();
@@ -23,13 +24,14 @@ export async function login(formData: FormData) {
 export async function forgotPassword(formData: FormData) {
   const supabase = await createClient();
   const email = formData.get("email") as string;
+  const siteUrl = getSiteUrl();
 
   if (!email?.trim()) {
     redirect("/login?error=" + encodeURIComponent("Email is required"));
   }
 
   const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/auth/callback?next=/auth/reset-password`,
+    redirectTo: `${siteUrl}/auth/callback?next=/auth/reset-password`,
   });
 
   if (error) {
