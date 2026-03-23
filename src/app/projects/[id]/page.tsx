@@ -101,6 +101,14 @@ export default async function ProjectDetailPage({
           : "No analyses yet",
       icon: "globe",
     },
+    {
+      title: "SEO/AEO Analyzer",
+      description:
+        "Scrape a page URL, score SEO and answer engine readiness, and get prioritized fixes.",
+      href: `/projects/${id}/seo-aeo`,
+      stat: project.prod_url ? "Ready to analyze" : "Set Production URL first",
+      icon: "spark",
+    },
   ];
 
   return (
@@ -288,6 +296,27 @@ function CardIcon({ type }: { type: string }) {
           <circle cx="12" cy="12" r="10" />
           <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
           <path d="M2 12h20" />
+        </svg>
+      );
+    case "spark":
+      return (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-zinc-500 dark:text-zinc-400"
+        >
+          <path d="m12 3-1.9 4.9L5 10l5.1 2.1L12 17l1.9-4.9L19 10l-5.1-2.1Z" />
+          <path d="M5 3v3" />
+          <path d="M3.5 4.5h3" />
+          <path d="M19 17v4" />
+          <path d="M17 19h4" />
         </svg>
       );
     default:

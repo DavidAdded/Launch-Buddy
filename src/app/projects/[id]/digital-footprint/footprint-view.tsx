@@ -3,7 +3,11 @@
 import { useState, useTransition, useMemo } from "react";
 import { requestFootprint } from "../../actions";
 import type { FootprintFullResponse, Source } from "@/lib/footprint-prompt";
-import { FOOTPRINT_GROUPS } from "@/lib/footprint-prompt";
+import {
+  FOOTPRINT_GROUPS,
+  FOOTPRINT_TOTAL_GROUPS,
+  FOOTPRINT_TOTAL_QUESTIONS,
+} from "@/lib/footprint-prompt";
 import {
   Chart as ChartJS,
   RadialLinearScale,
@@ -139,7 +143,7 @@ export function FootprintView({
         <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
           <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600 dark:border-zinc-700 dark:border-t-zinc-300" />
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Browsing website and analyzing 100 questions across 10 categories...
+            Browsing website and analyzing {FOOTPRINT_TOTAL_QUESTIONS} questions across {FOOTPRINT_TOTAL_GROUPS} categories...
           </p>
           <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
             This may take 2-3 minutes as the model browses the web for each
@@ -319,7 +323,7 @@ const SOURCE_TYPE_COLORS: Record<Source["type"], string> = {
 };
 
 function FootprintCharts({ parsed }: { parsed: FootprintFullResponse }) {
-  const { sourceTypeCounts, totalSources, radarData, doughnutData } = useMemo(() => {
+  const { totalSources, radarData, doughnutData } = useMemo(() => {
     const counts: Record<Source["type"], number> = {
       company_site: 0,
       press: 0,

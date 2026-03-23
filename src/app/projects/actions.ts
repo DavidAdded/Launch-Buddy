@@ -9,8 +9,10 @@ import {
   buildGroupPrompt,
   GROUP_JSON_SCHEMA,
   FOOTPRINT_GROUPS,
+  FOOTPRINT_TOTAL_GROUPS,
 } from "@/lib/footprint-prompt";
 import type { GroupResponse, FootprintFullResponse } from "@/lib/footprint-prompt";
+import { analyzeSeoAeoUrl } from "@/lib/seo-aeo-analyzer";
 
 function parseOptionalBudgetHours(value: string | null) {
   const trimmed = value?.trim() ?? "";
@@ -442,6 +444,50 @@ export async function addChecklistItem(formData: FormData) {
   return { error: null };
 }
 
+export async function analyzeSeoAeoPage(projectId: string, rawUrl?: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated", result: null };
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id, prod_url, user_id, is_public")
+    .eq("id", projectId)
+    .single();
+
+  if (!project) {
+    return { error: "Project not found", result: null };
+  }
+
+  const canAnalyze = project.user_id === user.id || project.is_public;
+  if (!canAnalyze) {
+    return { error: "Not authorized", result: null };
+  }
+
+  const targetUrl = rawUrl?.trim() || project.prod_url?.trim() || "";
+  if (!targetUrl) {
+    return {
+      error: "Production URL is missing. Set one in project settings or enter a URL.",
+      result: null,
+    };
+  }
+
+  try {
+    const result = await analyzeSeoAeoUrl(targetUrl);
+    revalidatePath(`/projects/${projectId}/seo-aeo`);
+    return { error: null, result };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Failed to analyze the page";
+    return { error: message, result: null };
+  }
+}
+
 export async function requestFootprint(projectId: string) {
   const supabase = await createClient();
   const {
@@ -538,7 +584,7 @@ export async function requestFootprint(projectId: string) {
         .from("footprint_requests")
         .update({
           status: "error",
-          error_message: `All 10 groups failed. ${errorSummary}`,
+          error_message: `All ${FOOTPRINT_TOTAL_GROUPS} groups failed. ${errorSummary}`,
         })
         .eq("id", request.id);
       return { error: "All analysis groups failed. Please try again." };
@@ -571,7 +617,7 @@ export async function requestFootprint(projectId: string) {
     const status = failed.length > 0 ? "completed" : "completed";
     const errorNote =
       failed.length > 0
-        ? `${failed.length} of 10 groups failed: ${failed.map((f) => f.groupId).join(", ")}`
+        ? `${failed.length} of ${FOOTPRINT_TOTAL_GROUPS} groups failed: ${failed.map((f) => f.groupId).join(", ")}`
         : null;
 
     await supabase
