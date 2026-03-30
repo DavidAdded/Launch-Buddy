@@ -16,9 +16,16 @@ export type GroupResponse = {
   questions: AnsweredQuestion[];
 };
 
+export type FootprintOriginSummary = {
+  summary: string;
+  confidence: number;
+  sources: Source[];
+};
+
 export type FootprintFullResponse = {
   groups: GroupResponse[];
   group_meta?: FootprintGroup[];
+  origin_summary?: FootprintOriginSummary;
 };
 
 export type FootprintGroup = {
@@ -95,11 +102,9 @@ export const FOOTPRINT_TOTAL_QUESTIONS = FOOTPRINT_GROUPS.reduce(
 export function buildGroupPrompt(
   group: FootprintGroup,
   companyName: string,
-  productionUrl: string
+  productionUrl: string,
 ): string {
-  const numberedQuestions = group.questions
-    .map((q, i) => `${i + 1}. ${q}`)
-    .join("\n");
+  const numberedQuestions = group.questions.map((q, i) => `${i + 1}. ${q}`).join("\n");
 
   return `You are performing a digital footprint & authority analysis for a specific category of questions.
 
@@ -132,6 +137,57 @@ CONFIDENCE SCORING
 - <0.3: very low confidence, answer is speculative
 
 RETURN JSON ONLY (schema enforced).`;
+}
+
+export function buildOriginSummaryPrompt(
+  companyName: string,
+  productionUrl: string,
+  groups: FootprintGroup[],
+  responses: GroupResponse[],
+): string {
+  const categoryDigest = groups
+    .map((group, index) => {
+      const response = responses[index];
+      if (!response) {
+        return `- ${group.title}: No category response available.`;
+      }
+
+      return [
+        `- ${group.title}`,
+        `  Summary: ${response.summary}`,
+        ...response.questions.map((question) => `  Q: ${question.question}\n  A: ${question.answer}`),
+      ].join("\n");
+    })
+    .join("\n\n");
+
+  const sourcePool = responses
+    .flatMap((response) => response.questions)
+    .flatMap((question) => question.sources)
+    .map((source) => `- ${source.type} | ${source.title} | ${source.url}`)
+    .slice(0, 80)
+    .join("\n");
+
+  return `You are synthesizing ONE company-level digital footprint summary from already-produced category analyses.
+
+Company: ${companyName}
+Website: ${productionUrl}
+
+CATEGORY ANALYSIS INPUT
+${categoryDigest}
+
+SOURCE POOL (use only these URLs)
+${sourcePool || "- none"}
+
+TASK
+Return a single holistic summary for the company as a whole.
+
+OUTPUT RULES
+- Return ONLY valid JSON matching the schema.
+- "summary": 2-4 sentences, concise but specific.
+- "confidence": a number from 0 to 1.
+- "sources": include 2-6 strongest supporting sources.
+- Source URLs MUST be selected from SOURCE POOL only.
+- No fabricated URLs, no markdown, no extra keys.`;
 }
 
 const sourceSchema = {
@@ -172,6 +228,22 @@ export const GROUP_JSON_SCHEMA = {
       },
     },
     required: ["summary", "questions"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const ORIGIN_SUMMARY_JSON_SCHEMA = {
+  type: "json_schema" as const,
+  name: "footprint_origin_summary",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      summary: { type: "string" },
+      confidence: { type: "number" },
+      sources: { type: "array", items: sourceSchema },
+    },
+    required: ["summary", "confidence", "sources"],
     additionalProperties: false,
   },
 } as const;

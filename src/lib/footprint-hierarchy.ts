@@ -16,18 +16,13 @@ type CsvParseResult = {
   warnings: string[];
 };
 
-const GROUP_EMOJIS = [
-  "1️⃣",
-  "2️⃣",
-  "3️⃣",
-  "4️⃣",
-  "5️⃣",
-  "6️⃣",
-  "7️⃣",
-  "8️⃣",
-  "9️⃣",
-  "🔟",
-];
+type ParsedRow = {
+  rowIndex: number;
+  question: string;
+  path: string[];
+};
+
+const GROUP_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
 
 const QUESTION_COLUMN_CANDIDATES = ["question", "prompt", "fraga", "fråga"];
 
@@ -69,9 +64,7 @@ export function parseFootprintHierarchyCsv(csvText: string): CsvParseResult {
     );
   }
 
-  const root: FootprintTreeNode[] = [];
-  const groupMap = new Map<string, { title: string; questions: string[] }>();
-  const seenQuestionIds = new Set<string>();
+  const parsedRows: ParsedRow[] = [];
 
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
@@ -90,10 +83,37 @@ export function parseFootprintHierarchyCsv(csvText: string): CsvParseResult {
       .filter(Boolean);
 
     if (path.length === 0) {
-      path.push("Imported Questions");
+      parsedRows.push({ rowIndex, question, path: ["Imported Questions"] });
+      continue;
     }
 
-    const groupTitle = path[0];
+    parsedRows.push({ rowIndex, question, path });
+  }
+
+  if (parsedRows.length === 0) {
+    return { groups: [], tree: [], warnings };
+  }
+
+  let groupLevelIndex = 0;
+  const hasMultipleLevels = parsedRows.every((entry) => entry.path.length > 1);
+  const firstLevelSet = new Set(parsedRows.map((entry) => entry.path[0]?.toLowerCase()));
+
+  if (hasMultipleLevels && firstLevelSet.size === 1) {
+    groupLevelIndex = 1;
+    const sharedRoot = parsedRows[0]?.path[0] ?? "Root";
+    warnings.push(
+      `Detected shared level-1 root "${sharedRoot}". Grouping analysis by level 2 while keeping level 1 in the navigator.`,
+    );
+  }
+
+  const root: FootprintTreeNode[] = [];
+  const groupMap = new Map<string, { title: string; questions: string[] }>();
+  const seenQuestionIds = new Set<string>();
+
+  for (const entry of parsedRows) {
+    const { rowIndex, question, path } = entry;
+
+    const groupTitle = path[groupLevelIndex] ?? path[0] ?? "Imported Questions";
     const groupIdBase = slugify(groupTitle);
     const groupId = groupIdBase || `group-${rowIndex}`;
 
@@ -110,6 +130,7 @@ export function parseFootprintHierarchyCsv(csvText: string): CsvParseResult {
     path.forEach((segment, level) => {
       const segmentId = slugify(segment) || `level-${level + 1}`;
       parentPath = parentPath ? `${parentPath}/${segmentId}` : segmentId;
+
       let node = nodes.find(
         (candidate) => candidate.kind === "category" && candidate.id === parentPath,
       );
@@ -226,10 +247,7 @@ function normalizeHeader(value: string) {
 }
 
 function isLevelHeader(header: string) {
-  return (
-    /^(level|nav)(_|-)?\d*$/.test(header) ||
-    ["category", "group", "section", "theme"].includes(header)
-  );
+  return /^(level|nav)(_|-)?\d*$/.test(header) || ["category", "group", "section", "theme"].includes(header);
 }
 
 function getLevelOrder(header: string) {

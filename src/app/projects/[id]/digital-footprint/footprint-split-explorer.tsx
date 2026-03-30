@@ -29,34 +29,103 @@ type AnswerTag =
   | "Underemphasis"
   | "Notable wording";
 
-type DrawHit = {
+type PositionedNode = {
+  id: string;
+  title: string;
+  kind: FootprintTreeNode["kind"];
+  level: number;
+  groupId?: string;
+  question?: string;
+  parentId: string | null;
+  childrenIds: string[];
   x: number;
   y: number;
   width: number;
   height: number;
-  node: FootprintTreeNode;
+  isOrigin?: boolean;
 };
 
-type CanvasDrawNode = {
-  node: FootprintTreeNode;
-  subtitle: string;
+type DrawHit = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  node: PositionedNode;
 };
 
-const PAGE_SIZE = 6;
-const CANVAS_HEIGHT = 420;
+type LayoutResult = {
+  nodes: PositionedNode[];
+  nodeById: Map<string, PositionedNode>;
+  edges: Array<{ fromId: string; toId: string }>;
+  bounds: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  };
+};
+
+const CANVAS_HEIGHT = 460;
+const ORIGIN_TO_FIRST_SPACING = 214;
+const LEVEL_SPACING = 244;
+const V_SPACING = 120;
+const ROOT_GAP = 1;
+const H_MARGIN = 120;
+const V_MARGIN = 90;
+
+const CATEGORY_WIDTH = 192;
+const CATEGORY_HEIGHT = 72;
+const QUESTION_WIDTH = 232;
+const QUESTION_HEIGHT = 64;
+const ORIGIN_WIDTH = 184;
+const ORIGIN_HEIGHT = 74;
+const VIEW_SCALE = 0.9;
+
+const ORIGIN_NODE_ID = "__origin__";
+const ORIGIN_NODE_TITLE = "Oatly";
 
 const TAG_MATCHERS: Array<{ tag: AnswerTag; pattern: RegExp }> = [
-  { tag: "Core description", pattern: /what is|described as|known for|core brand|stand for/i },
-  { tag: "Brand attributes", pattern: /innovative|premium|mainstream|quality|authentic/i },
-  { tag: "Values/associations", pattern: /values|lifestyle|sustainab|ethical|culture|symbolic/i },
+  {
+    tag: "Core description",
+    pattern: /what is|described as|known for|core brand|stand for/i,
+  },
+  {
+    tag: "Brand attributes",
+    pattern: /innovative|premium|mainstream|quality|authentic/i,
+  },
+  {
+    tag: "Values/associations",
+    pattern: /values|lifestyle|sustainab|ethical|culture|symbolic/i,
+  },
   { tag: "Audience", pattern: /consumer|audience|segment|buyers|people who/i },
-  { tag: "Tone/personality", pattern: /tone|personality|voice|playful|provocative|bold/i },
-  { tag: "Positive arguments", pattern: /strength|benefit|advantage|recommended|choose/i },
-  { tag: "Negative arguments", pattern: /downside|avoid|drawback|concern|not recommended/i },
-  { tag: "Criticisms/skepticism", pattern: /critic|skeptic|backlash|doubt|questioned/i },
-  { tag: "Tensions/contradictions", pattern: /tension|contradiction|however|yet|trade-off/i },
-  { tag: "Overemphasis", pattern: /overhyped|too much focus|overemphasized/i },
-  { tag: "Underemphasis", pattern: /underreported|underemphasized|missing from narrative/i },
+  {
+    tag: "Tone/personality",
+    pattern: /tone|personality|voice|playful|provocative|bold/i,
+  },
+  {
+    tag: "Positive arguments",
+    pattern: /strength|benefit|advantage|recommended|choose/i,
+  },
+  {
+    tag: "Negative arguments",
+    pattern: /downside|avoid|drawback|concern|not recommended/i,
+  },
+  {
+    tag: "Criticisms/skepticism",
+    pattern: /critic|skeptic|backlash|doubt|questioned/i,
+  },
+  {
+    tag: "Tensions/contradictions",
+    pattern: /tension|contradiction|however|yet|trade-off/i,
+  },
+  {
+    tag: "Overemphasis",
+    pattern: /overhyped|too much focus|overemphasized/i,
+  },
+  {
+    tag: "Underemphasis",
+    pattern: /underreported|underemphasized|missing from narrative/i,
+  },
   { tag: "Notable wording", pattern: /".+"|'.+'|framed as|wording/i },
 ];
 
@@ -71,17 +140,33 @@ export function FootprintSplitExplorer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hitMapRef = useRef<DrawHit[]>([]);
+  const animationFrameRef = useRef<number | null>(null);
 
   const effectiveTree = useMemo(
     () => tree ?? buildTreeFromGroups(groupMeta),
     [tree, groupMeta],
   );
 
-  const [focusNodeId, setFocusNodeId] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
-  const [selection, setSelection] = useState<ExplorerSelection | null>(
-    effectiveTree[0] ? { kind: "category", nodeId: effectiveTree[0].id } : null,
-  );
+  const layout = useMemo(() => buildFlowLayout(effectiveTree), [effectiveTree]);
+
+  const initialCenter = useMemo(() => {
+    const origin = layout.nodeById.get(ORIGIN_NODE_ID);
+    if (origin) {
+      return { x: origin.x, y: origin.y };
+    }
+    return {
+      x: (layout.bounds.minX + layout.bounds.maxX) / 2,
+      y: (layout.bounds.minY + layout.bounds.maxY) / 2,
+    };
+  }, [layout]);
+
+  const [selection, setSelection] = useState<ExplorerSelection | null>(null);
+  const [viewCenter, setViewCenter] = useState(initialCenter);
+
+  const viewCenterRef = useRef(viewCenter);
+  useEffect(() => {
+    viewCenterRef.current = viewCenter;
+  }, [viewCenter]);
 
   const groupById = useMemo(() => {
     const map = new Map<string, GroupResponse>();
@@ -101,30 +186,84 @@ export function FootprintSplitExplorer({
     return map;
   }, [groupMeta]);
 
-  const focusPath = useMemo(() => {
-    if (!focusNodeId) {
+  const selectedPath = useMemo(() => {
+    if (!selection || selection.nodeId === ORIGIN_NODE_ID) {
       return [] as FootprintTreeNode[];
     }
+    return findPathById(effectiveTree, selection.nodeId) ?? [];
+  }, [effectiveTree, selection]);
 
-    return findPathById(effectiveTree, focusNodeId) ?? [];
-  }, [effectiveTree, focusNodeId]);
+  const selectedPathEdgeKeys = useMemo(() => {
+    const keys = new Set<string>();
 
-  const focusNode = focusPath.length > 0 ? focusPath[focusPath.length - 1] : null;
-  const nodesAtFocus = focusNode ? focusNode.children : effectiveTree;
+    if (!selection) {
+      return keys;
+    }
 
-  const totalPages = Math.max(1, Math.ceil(nodesAtFocus.length / PAGE_SIZE));
-  const boundedPage = Math.min(page, totalPages - 1);
-  const visibleNodes = nodesAtFocus.slice(
-    boundedPage * PAGE_SIZE,
-    boundedPage * PAGE_SIZE + PAGE_SIZE,
+    if (selection.nodeId === ORIGIN_NODE_ID) {
+      effectiveTree.forEach((rootNode) => {
+        keys.add(`${ORIGIN_NODE_ID}->${rootNode.id}`);
+      });
+      return keys;
+    }
+
+    if (selectedPath.length > 0) {
+      keys.add(`${ORIGIN_NODE_ID}->${selectedPath[0]?.id}`);
+    }
+
+    for (let index = 0; index < selectedPath.length - 1; index += 1) {
+      const from = selectedPath[index]?.id;
+      const to = selectedPath[index + 1]?.id;
+      if (from && to) {
+        keys.add(`${from}->${to}`);
+      }
+    }
+
+    return keys;
+  }, [effectiveTree, selectedPath, selection]);
+
+  const visibleNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    ids.add(ORIGIN_NODE_ID);
+
+    if (!selection) {
+      return ids;
+    }
+
+    if (selection.nodeId === ORIGIN_NODE_ID) {
+      const origin = layout.nodeById.get(ORIGIN_NODE_ID);
+      origin?.childrenIds.forEach((childId) => ids.add(childId));
+      return ids;
+    }
+
+    selectedPath.forEach((node) => ids.add(node.id));
+
+    const selectedNode = layout.nodeById.get(selection.nodeId);
+    selectedNode?.childrenIds.forEach((childId) => ids.add(childId));
+
+    if (selectedPath.length === 0) {
+      const origin = layout.nodeById.get(ORIGIN_NODE_ID);
+      origin?.childrenIds.forEach((childId) => ids.add(childId));
+    }
+
+    return ids;
+  }, [layout, selectedPath, selection]);
+
+  const breadcrumbs = useMemo(
+    () => [
+      { id: ORIGIN_NODE_ID, title: ORIGIN_NODE_TITLE },
+      ...selectedPath.map((step) => ({ id: step.id, title: step.title })),
+    ],
+    [selectedPath],
   );
 
-  const drawNodes = useMemo<CanvasDrawNode[]>(() => {
-    return visibleNodes.map((node) => ({
-      node,
-      subtitle: describeNode(node, groupById),
-    }));
-  }, [groupById, visibleNodes]);
+  useEffect(() => {
+    return () => {
+      if (animationFrameRef.current !== null) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -141,74 +280,90 @@ export function FootprintSplitExplorer({
     canvas.height = Math.floor(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    drawCanvas(
+    drawFlowCanvas(
       ctx,
       width,
       height,
-      drawNodes,
+      layout,
+      viewCenter,
+      visibleNodeIds,
+      selectedPathEdgeKeys,
       selection?.nodeId ?? null,
       hitMapRef,
+      groupById,
     );
-  }, [drawNodes, selection?.nodeId]);
+  }, [
+    groupById,
+    layout,
+    selection?.nodeId,
+    selectedPathEdgeKeys,
+    viewCenter,
+    visibleNodeIds,
+  ]);
 
-  const selectedNode = selection
-    ? findNodeById(effectiveTree, selection.nodeId)
-    : null;
+  const isOriginSelected = selection?.nodeId === ORIGIN_NODE_ID;
+  const selectedNode =
+    selection?.nodeId && !isOriginSelected
+      ? findNodeById(effectiveTree, selection.nodeId)
+      : null;
 
   const selectedQuestion =
     selection?.kind === "question"
       ? findAnsweredQuestion(groupById.get(selection.groupId), selection.question)
       : null;
 
-  function drillIntoCategory(node: FootprintTreeNode) {
-    setSelection({ kind: "category", nodeId: node.id });
-    if (node.children.length > 0) {
-      setPage(0);
-      setFocusNodeId(node.id);
+  function animateTo(target: { x: number; y: number }) {
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
     }
+
+    const from = viewCenterRef.current;
+    const to = clampCenter(target, layout.bounds);
+    const duration = 320;
+    let startTime: number | null = null;
+
+    const frame = (time: number) => {
+      if (startTime === null) {
+        startTime = time;
+      }
+
+      const progress = Math.min(1, (time - startTime) / duration);
+      const eased = easeInOutCubic(progress);
+      const next = {
+        x: from.x + (to.x - from.x) * eased,
+        y: from.y + (to.y - from.y) * eased,
+      };
+      setViewCenter(next);
+
+      if (progress < 1) {
+        animationFrameRef.current = requestAnimationFrame(frame);
+      } else {
+        animationFrameRef.current = null;
+      }
+    };
+
+    animationFrameRef.current = requestAnimationFrame(frame);
   }
 
-  function handleNodeClick(node: FootprintTreeNode) {
+  function selectByNode(node: PositionedNode) {
+    let nextSelection: ExplorerSelection;
     if (node.kind === "question") {
-      setSelection({
+      nextSelection = {
         kind: "question",
         nodeId: node.id,
         groupId: node.groupId ?? "",
         question: node.question ?? node.title,
-      });
-      return;
+      };
+    } else {
+      nextSelection = { kind: "category", nodeId: node.id };
     }
 
-    drillIntoCategory(node);
-  }
-
-  function stepBack() {
-    if (!focusNodeId) {
-      return;
+    setSelection(nextSelection);
+    const target = selectionFocusTarget(node.id, layout);
+    if (target) {
+      animateTo(target);
     }
-
-    setPage(0);
-    if (focusPath.length <= 1) {
-      setFocusNodeId(null);
-      return;
-    }
-
-    setFocusNodeId(focusPath[focusPath.length - 2].id);
-  }
-
-  function jumpToCrumb(index: number) {
-    setPage(0);
-    if (index === 0) {
-      setFocusNodeId(null);
-      return;
-    }
-
-    const target = focusPath[index - 1];
-    if (!target) {
-      return;
-    }
-
-    setFocusNodeId(target.id);
   }
 
   function handleCanvasClick(event: MouseEvent<HTMLCanvasElement>) {
@@ -221,40 +376,88 @@ export function FootprintSplitExplorer({
 
     const hit = hitMapRef.current.find(
       (candidate) =>
-        x >= candidate.x &&
-        x <= candidate.x + candidate.width &&
-        y >= candidate.y &&
-        y <= candidate.y + candidate.height,
+        x >= candidate.left &&
+        x <= candidate.left + candidate.width &&
+        y >= candidate.top &&
+        y <= candidate.top + candidate.height,
     );
 
     if (!hit) return;
-    handleNodeClick(hit.node);
+    selectByNode(hit.node);
+  }
+
+  function stepBack() {
+    if (!selection || selection.nodeId === ORIGIN_NODE_ID) {
+      return;
+    }
+
+    if (selectedPath.length <= 1) {
+      const originNode = layout.nodeById.get(ORIGIN_NODE_ID);
+      if (originNode) {
+        selectByNode(originNode);
+      }
+      return;
+    }
+
+    const parent = selectedPath[selectedPath.length - 2];
+    if (!parent) return;
+
+    const parentNode = layout.nodeById.get(parent.id);
+    if (parentNode) {
+      selectByNode(parentNode);
+    }
+  }
+
+  function jumpToCrumb(index: number) {
+    const target = breadcrumbs[index];
+    if (!target) return;
+
+    const node = layout.nodeById.get(target.id);
+    if (node) {
+      selectByNode(node);
+    }
+  }
+
+  function resetView() {
+    setSelection(null);
+    setViewCenter(initialCenter);
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
+    <div className="grid gap-4 lg:grid-cols-2">
       <aside className="rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              Footprint Navigator (2D)
+              Footprint Navigator (Flow)
             </h4>
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Click a card to focus that branch. The canvas moves to available children.
+              Rounded branch cards stay fixed. Click a node to reveal only its next
+              sub-branch.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={stepBack}
-            disabled={!focusNodeId}
-            className="cursor-pointer rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-          >
-            Back
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={stepBack}
+              disabled={!selection || selection.nodeId === ORIGIN_NODE_ID}
+              className="cursor-pointer rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Back
+            </button>
+            <button
+              type="button"
+              onClick={resetView}
+              className="cursor-pointer rounded-full border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Reset view
+            </button>
+          </div>
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          {[{ id: "root", title: "Overview" }, ...focusPath].map((step, index, all) => {
+          {breadcrumbs.map((step, index, all) => {
             const isLast = index === all.length - 1;
             return (
               <button
@@ -278,42 +481,21 @@ export function FootprintSplitExplorer({
           <canvas
             ref={canvasRef}
             onClick={handleCanvasClick}
-            className="h-[420px] w-full cursor-pointer rounded-lg bg-white dark:bg-zinc-900"
+            className="h-[460px] w-full cursor-pointer rounded-lg bg-white dark:bg-zinc-900"
             style={{ height: CANVAS_HEIGHT }}
           />
 
-          <div className="mt-3 flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
-            <span>
-              Showing {visibleNodes.length} of {nodesAtFocus.length} nodes
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPage((prev) => Math.max(0, prev - 1))}
-                disabled={boundedPage <= 0}
-                className="rounded-full border border-zinc-200 px-2.5 py-1 font-medium disabled:opacity-40 dark:border-zinc-700"
-              >
-                Prev
-              </button>
-              <span>
-                Page {boundedPage + 1}/{totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))}
-                disabled={boundedPage >= totalPages - 1}
-                className="rounded-full border border-zinc-200 px-2.5 py-1 font-medium disabled:opacity-40 dark:border-zinc-700"
-              >
-                Next
-              </button>
-            </div>
-          </div>
+          <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+            {layout.nodes.length} nodes • {layout.edges.length} links
+          </p>
         </div>
       </aside>
 
       <section className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-        {!selection || !selectedNode ? (
+        {!selection ? (
           <EmptyDetailState />
+        ) : isOriginSelected ? (
+          <OriginSummary parsed={parsed} groupMeta={groupMeta} groupById={groupById} />
         ) : selection.kind === "question" && selectedQuestion ? (
           <QuestionDetail
             question={selectedQuestion.question}
@@ -322,14 +504,104 @@ export function FootprintSplitExplorer({
             sources={selectedQuestion.sources}
             tags={extractTags(selectedQuestion.question, selectedQuestion.answer)}
           />
-        ) : (
+        ) : selectedNode ? (
           <CategorySummary
             node={selectedNode}
             groupById={groupById}
             groupTitlesById={groupTitlesById}
           />
+        ) : (
+          <EmptyDetailState />
         )}
       </section>
+    </div>
+  );
+}
+
+function OriginSummary({
+  parsed,
+  groupMeta,
+  groupById,
+}: {
+  parsed: FootprintFullResponse;
+  groupMeta: FootprintGroup[];
+  groupById: Map<string, GroupResponse>;
+}) {
+  const availableGroups = groupMeta
+    .map((group) => ({
+      group,
+      response: groupById.get(group.id),
+    }))
+    .filter(
+      (entry): entry is { group: FootprintGroup; response: GroupResponse } =>
+        Boolean(entry.response),
+    );
+
+  const allQuestions = availableGroups.flatMap((entry) => entry.response.questions);
+  const avgConfidence =
+    allQuestions.length > 0
+      ? allQuestions.reduce((sum, question) => sum + question.confidence, 0) /
+        allQuestions.length
+      : 0;
+
+  const aiOriginSummary = parsed.origin_summary ?? null;
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
+          {ORIGIN_NODE_TITLE}
+        </h4>
+        {aiOriginSummary && (
+          <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+            {Math.round(aiOriginSummary.confidence * 100)}% overall confidence
+          </span>
+        )}
+      </div>
+
+      <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+        {aiOriginSummary?.summary ??
+          `Origin overview across ${availableGroups.length} categories and ${allQuestions.length} answers.`}
+      </p>
+
+      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+        {availableGroups.length} categories • {allQuestions.length} answers • {Math.round(avgConfidence * 100)}% average category confidence
+      </p>
+
+      {aiOriginSummary?.sources?.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {aiOriginSummary.sources.map((source, index) => (
+            <a
+              key={`${source.url}-${index}`}
+              href={source.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              <span className="rounded bg-zinc-100 px-1 py-0.5 text-[10px] font-medium dark:bg-zinc-800">
+                {source.type}
+              </span>
+              <span className="max-w-[220px] truncate">{source.title}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {availableGroups.map((entry) => (
+          <article
+            key={entry.group.id}
+            className="rounded-xl border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-950"
+          >
+            <h5 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">
+              {entry.group.emoji} {entry.group.title}
+            </h5>
+            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+              {entry.response.summary}
+            </p>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }
@@ -443,9 +715,7 @@ function QuestionDetail({
   return (
     <div>
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
-          {question}
-        </h4>
+        <h4 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">{question}</h4>
         <span className="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
           {Math.round(confidence * 100)}% confidence
         </span>
@@ -477,7 +747,8 @@ function QuestionDetail({
 function EmptyDetailState() {
   return (
     <div className="rounded-xl border border-dashed border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-400">
-      Select a branch from the 2D navigator to view summaries, or select a question card to see the full answer.
+      Click the Oatly origin node to start exploring, then click a branch to reveal
+      its sub-nodes.
     </div>
   );
 }
@@ -512,114 +783,330 @@ function SourceLinks({ sources }: { sources: Source[] }) {
   );
 }
 
-function describeNode(node: FootprintTreeNode, groupById: Map<string, GroupResponse>) {
-  if (node.kind === "question") {
-    const question = node.question ?? node.title;
-    const answer = findAnsweredQuestion(
-      node.groupId ? groupById.get(node.groupId) : undefined,
-      question,
-    );
+function buildFlowLayout(tree: FootprintTreeNode[]): LayoutResult {
+  const nodes: PositionedNode[] = [];
+  const nodeById = new Map<string, PositionedNode>();
+  const edges: Array<{ fromId: string; toId: string }> = [];
 
-    if (!answer) {
-      return "Question response";
+  let leafIndex = 0;
+
+  const placeNode = (
+    node: FootprintTreeNode,
+    level: number,
+    parentId: string | null,
+  ): PositionedNode => {
+    const isQuestion = node.kind === "question";
+    const width = isQuestion ? QUESTION_WIDTH : CATEGORY_WIDTH;
+    const height = isQuestion ? QUESTION_HEIGHT : CATEGORY_HEIGHT;
+
+    const positioned: PositionedNode = {
+      id: node.id,
+      title: node.title,
+      kind: node.kind,
+      level,
+      groupId: node.groupId,
+      question: node.question,
+      parentId,
+      childrenIds: node.children.map((child) => child.id),
+      x: H_MARGIN + ORIGIN_TO_FIRST_SPACING + (level - 1) * LEVEL_SPACING,
+      y: 0,
+      width,
+      height,
+    };
+
+    nodes.push(positioned);
+    nodeById.set(positioned.id, positioned);
+
+    if (parentId) {
+      edges.push({ fromId: parentId, toId: positioned.id });
     }
 
-    return `${Math.round(answer.confidence * 100)}% confidence • ${answer.sources.length} source${answer.sources.length === 1 ? "" : "s"}`;
+    if (node.children.length === 0) {
+      positioned.y = V_MARGIN + leafIndex * V_SPACING;
+      leafIndex += 1;
+      return positioned;
+    }
+
+    const childNodes = node.children.map((child) => placeNode(child, level + 1, node.id));
+    const minChildY = Math.min(...childNodes.map((child) => child.y));
+    const maxChildY = Math.max(...childNodes.map((child) => child.y));
+    positioned.y = (minChildY + maxChildY) / 2;
+
+    return positioned;
+  };
+
+  const rootNodeIds = tree.map((rootNode) => rootNode.id);
+
+  tree.forEach((rootNode, rootIndex) => {
+    placeNode(rootNode, 1, null);
+    if (rootIndex < tree.length - 1) {
+      leafIndex += ROOT_GAP;
+    }
+  });
+
+  const rootNodes = rootNodeIds
+    .map((rootId) => nodeById.get(rootId))
+    .filter((node): node is PositionedNode => Boolean(node));
+
+  const shiftSubtreeY = (nodeId: string, deltaY: number) => {
+    const stack = [nodeId];
+    while (stack.length > 0) {
+      const currentId = stack.pop();
+      if (!currentId) continue;
+
+      const currentNode = nodeById.get(currentId);
+      if (!currentNode) continue;
+
+      currentNode.y += deltaY;
+      currentNode.childrenIds.forEach((childId) => stack.push(childId));
+    }
+  };
+
+  if (rootNodes.length > 1) {
+    const orderedRoots = [...rootNodes].sort((a, b) => a.y - b.y);
+    const rootVerticalGap = Math.max(CATEGORY_HEIGHT + 24, 104);
+    const currentCenterY =
+      orderedRoots.reduce((sum, node) => sum + node.y, 0) / orderedRoots.length;
+    const compactStartY =
+      currentCenterY - ((orderedRoots.length - 1) * rootVerticalGap) / 2;
+
+    orderedRoots.forEach((rootNode, index) => {
+      const targetY = compactStartY + index * rootVerticalGap;
+      const deltaY = targetY - rootNode.y;
+      if (Math.abs(deltaY) > 0.5) {
+        shiftSubtreeY(rootNode.id, deltaY);
+      }
+    });
   }
 
-  const questionCount = collectQuestionNodes(node).length;
-  const branchCount = node.children.filter((child) => child.kind === "category").length;
+  if (rootNodes.length > 0) {
+    const originY = rootNodes.reduce((sum, node) => sum + node.y, 0) / rootNodes.length;
 
-  if (branchCount > 0) {
-    return `${branchCount} branch${branchCount === 1 ? "" : "es"} • ${questionCount} question${questionCount === 1 ? "" : "s"}`;
+    const originNode: PositionedNode = {
+      id: ORIGIN_NODE_ID,
+      title: ORIGIN_NODE_TITLE,
+      kind: "category",
+      level: 0,
+      parentId: null,
+      childrenIds: rootNodes.map((node) => node.id),
+      x: H_MARGIN,
+      y: originY,
+      width: ORIGIN_WIDTH,
+      height: ORIGIN_HEIGHT,
+      isOrigin: true,
+    };
+
+    nodes.push(originNode);
+    nodeById.set(originNode.id, originNode);
+
+    rootNodes.forEach((rootNode) => {
+      edges.push({ fromId: originNode.id, toId: rootNode.id });
+    });
   }
 
-  return `${questionCount} question${questionCount === 1 ? "" : "s"}`;
+  if (nodes.length === 0) {
+    return {
+      nodes,
+      nodeById,
+      edges,
+      bounds: { minX: 0, maxX: 0, minY: 0, maxY: 0 },
+    };
+  }
+
+  const lefts = nodes.map((node) => node.x - node.width / 2);
+  const rights = nodes.map((node) => node.x + node.width / 2);
+  const tops = nodes.map((node) => node.y - node.height / 2);
+  const bottoms = nodes.map((node) => node.y + node.height / 2);
+
+  return {
+    nodes,
+    nodeById,
+    edges,
+    bounds: {
+      minX: Math.min(...lefts) - H_MARGIN,
+      maxX: Math.max(...rights) + H_MARGIN,
+      minY: Math.min(...tops) - V_MARGIN,
+      maxY: Math.max(...bottoms) + V_MARGIN,
+    },
+  };
 }
 
-function drawCanvas(
+function drawFlowCanvas(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  nodes: CanvasDrawNode[],
+  layout: LayoutResult,
+  viewCenter: { x: number; y: number },
+  visibleNodeIds: Set<string>,
+  selectedPathEdgeKeys: Set<string>,
   selectedNodeId: string | null,
   hitMapRef: MutableRefObject<DrawHit[]>,
+  groupById: Map<string, GroupResponse>,
 ) {
   hitMapRef.current = [];
-
   ctx.clearRect(0, 0, width, height);
 
-  ctx.strokeStyle = "rgba(148,163,184,0.14)";
+  drawCanvasGrid(ctx, width, height);
+
+  const centerX = width / 2;
+  const centerY = height / 2;
+
+  const positionedScreen = new Map<string, { x: number; y: number; node: PositionedNode }>();
+  layout.nodes.forEach((node) => {
+    positionedScreen.set(node.id, {
+      x: node.x - viewCenter.x + centerX,
+      y: node.y - viewCenter.y + centerY,
+      node,
+    });
+  });
+
+  for (const edge of layout.edges) {
+    if (!visibleNodeIds.has(edge.fromId) || !visibleNodeIds.has(edge.toId)) {
+      continue;
+    }
+
+    const from = positionedScreen.get(edge.fromId);
+    const to = positionedScreen.get(edge.toId);
+    if (!from || !to) continue;
+
+    const edgeKey = `${edge.fromId}->${edge.toId}`;
+    drawFlowLink(ctx, from, to, selectedPathEdgeKeys.has(edgeKey));
+  }
+
+  for (const node of layout.nodes) {
+    if (!visibleNodeIds.has(node.id)) {
+      continue;
+    }
+
+    const screen = positionedScreen.get(node.id);
+    if (!screen) continue;
+
+    const x = screen.x;
+    const y = screen.y;
+    const widthHalf = node.width / 2;
+    const heightHalf = node.height / 2;
+
+    if (
+      x + widthHalf < -40 ||
+      x - widthHalf > width + 40 ||
+      y + heightHalf < -40 ||
+      y - heightHalf > height + 40
+    ) {
+      continue;
+    }
+
+    const left = x - widthHalf;
+    const top = y - heightHalf;
+    const isSelected =
+      selectedNodeId === node.id || (!selectedNodeId && node.isOrigin === true);
+    const subtitle = nodeSubtitle(node, groupById, layout);
+
+    drawNodeCard(ctx, left, top, node.width, node.height, node.kind, isSelected, node.isOrigin === true);
+    drawCenteredText(ctx, node.title, x, y - 8, node.width - 24, 14, 2, 600);
+    drawCenteredText(ctx, subtitle, x, y + 16, node.width - 20, 12, 2, 500);
+
+    hitMapRef.current.push({
+      left,
+      top,
+      width: node.width,
+      height: node.height,
+      node,
+    });
+  }
+}
+
+function drawCanvasGrid(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  ctx.strokeStyle = "rgba(148,163,184,0.12)";
   ctx.lineWidth = 1;
-  for (let x = 0; x <= width; x += 30) {
+
+  for (let x = 0; x <= width; x += 28) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
   }
-  for (let y = 0; y <= height; y += 30) {
+
+  for (let y = 0; y <= height; y += 28) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
     ctx.stroke();
   }
-
-  const columns = nodes.length <= 2 ? 2 : 3;
-  const rows = Math.max(1, Math.ceil(nodes.length / columns));
-  const gapX = 16;
-  const gapY = 16;
-  const margin = 16;
-  const cardWidth = (width - margin * 2 - gapX * (columns - 1)) / columns;
-  const cardHeight = (height - margin * 2 - gapY * (rows - 1)) / rows;
-
-  nodes.forEach((drawNode, index) => {
-    const node = drawNode.node;
-    const col = index % columns;
-    const row = Math.floor(index / columns);
-    const x = margin + col * (cardWidth + gapX);
-    const y = margin + row * (cardHeight + gapY);
-
-    const color = colorForNode(node.kind);
-    drawRoundedCard(ctx, x, y, cardWidth, cardHeight, color);
-
-    if (selectedNodeId === node.id) {
-      ctx.strokeStyle = "rgba(255,255,255,0.9)";
-      ctx.lineWidth = 2;
-      roundedRectPath(ctx, x + 1.5, y + 1.5, cardWidth - 3, cardHeight - 3, 14);
-      ctx.stroke();
-    }
-
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "600 14px Inter, sans-serif";
-    drawWrappedText(ctx, node.title, x + 14, y + 24, cardWidth - 28, 18, 3);
-
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.font = "500 12px Inter, sans-serif";
-    drawWrappedText(ctx, drawNode.subtitle, x + 14, y + cardHeight - 42, cardWidth - 28, 16, 2);
-
-    ctx.fillStyle = "rgba(255,255,255,0.84)";
-    ctx.font = "500 11px Inter, sans-serif";
-    ctx.fillText(node.kind.toUpperCase(), x + 14, y + cardHeight - 12);
-
-    hitMapRef.current.push({ x, y, width: cardWidth, height: cardHeight, node });
-  });
 }
 
-function drawRoundedCard(
+function drawFlowLink(
   ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
+  from: { x: number; y: number; node: PositionedNode },
+  to: { x: number; y: number; node: PositionedNode },
+  highlighted: boolean,
+) {
+  const fromRight = from.x + from.node.width / 2 - 8;
+  const toLeft = to.x - to.node.width / 2 + 8;
+  const minGap = 24;
+  const startX = Math.min(fromRight, toLeft - minGap);
+  const endX = Math.max(toLeft, startX + minGap);
+  const controlOffset = Math.max(24, Math.min(110, (endX - startX) * 0.45));
+
+  ctx.beginPath();
+  ctx.moveTo(startX, from.y);
+  ctx.bezierCurveTo(
+    startX + controlOffset,
+    from.y,
+    endX - controlOffset,
+    to.y,
+    endX,
+    to.y,
+  );
+  ctx.strokeStyle = highlighted ? "rgba(99,102,241,0.86)" : "rgba(100,116,139,0.30)";
+  ctx.lineWidth = highlighted ? 2.4 : 1.35;
+  ctx.stroke();
+}
+
+function drawNodeCard(
+  ctx: CanvasRenderingContext2D,
+  left: number,
+  top: number,
   width: number,
   height: number,
-  color: string,
+  kind: FootprintTreeNode["kind"],
+  selected: boolean,
+  isOrigin: boolean,
 ) {
-  roundedRectPath(ctx, x, y, width, height, 16);
+  const radius = Math.min(20, height / 2.3);
 
-  const gradient = ctx.createLinearGradient(x, y, x + width, y + height);
-  gradient.addColorStop(0, color);
-  gradient.addColorStop(1, "#111827");
+  roundedRectPath(ctx, left, top, width, height, radius);
+
+  const gradient = ctx.createLinearGradient(left, top, left + width, top + height);
+  if (isOrigin) {
+    gradient.addColorStop(0, "#c2410c");
+    gradient.addColorStop(1, "#9a3412");
+  } else if (kind === "question") {
+    gradient.addColorStop(0, "#0f766e");
+    gradient.addColorStop(1, "#065f46");
+  } else {
+    gradient.addColorStop(0, "#1d4ed8");
+    gradient.addColorStop(1, "#1e3a8a");
+  }
+
+  ctx.save();
+  ctx.shadowColor = "rgba(15, 23, 42, 0.20)";
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 4;
   ctx.fillStyle = gradient;
   ctx.fill();
+  ctx.restore();
+
+  roundedRectPath(ctx, left, top, width, height, radius);
+  ctx.strokeStyle = "rgba(255,255,255,0.14)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  if (selected) {
+    roundedRectPath(ctx, left - 3, top - 3, width + 6, height + 6, radius + 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.96)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
 }
 
 function roundedRectPath(
@@ -643,7 +1130,7 @@ function roundedRectPath(
   ctx.closePath();
 }
 
-function drawWrappedText(
+function drawCenteredText(
   ctx: CanvasRenderingContext2D,
   text: string,
   x: number,
@@ -651,15 +1138,39 @@ function drawWrappedText(
   maxWidth: number,
   lineHeight: number,
   maxLines: number,
+  fontWeight: 500 | 600,
+) {
+  const lines = wrapText(ctx, text, maxWidth, maxLines, fontWeight);
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = `${fontWeight} ${fontWeight === 600 ? 13 : 11}px Inter, sans-serif`;
+
+  const blockHeight = (lines.length - 1) * lineHeight;
+  lines.forEach((line, index) => {
+    ctx.fillText(line, x, y - blockHeight / 2 + index * lineHeight);
+  });
+
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
+}
+
+function wrapText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+  maxLines: number,
+  fontWeight: 500 | 600,
 ) {
   const words = text.split(" ");
   const lines: string[] = [];
   let current = "";
+  ctx.font = `${fontWeight} ${fontWeight === 600 ? 13 : 11}px Inter, sans-serif`;
 
   for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (ctx.measureText(candidate).width <= maxWidth) {
-      current = candidate;
+    const next = current ? `${current} ${word}` : word;
+    if (ctx.measureText(next).width <= maxWidth) {
+      current = next;
       continue;
     }
 
@@ -671,32 +1182,126 @@ function drawWrappedText(
       current = "";
     }
 
-    if (lines.length >= maxLines) break;
+    if (lines.length >= maxLines) {
+      break;
+    }
   }
 
   if (lines.length < maxLines && current) {
     lines.push(current);
   }
 
-  const rendered = lines.slice(0, maxLines);
-  if (lines.length > maxLines && rendered.length > 0) {
-    rendered[rendered.length - 1] = `${rendered[rendered.length - 1]}...`;
+  if (lines.length === 0) {
+    return [text];
   }
 
-  rendered.forEach((line, index) => {
-    ctx.fillText(line, x, y + index * lineHeight);
-  });
+  if (lines.length > maxLines) {
+    lines.length = maxLines;
+  }
+
+  if (lines.length === maxLines) {
+    const last = lines[maxLines - 1] ?? "";
+    if (ctx.measureText(last).width > maxWidth) {
+      lines[maxLines - 1] = `${last.slice(0, Math.max(4, last.length - 3))}...`;
+    }
+  }
+
+  return lines;
 }
 
-function colorForNode(kind: FootprintTreeNode["kind"]) {
-  switch (kind) {
-    case "category":
-      return "#1d4ed8";
-    case "question":
-      return "#0f766e";
-    default:
-      return "#374151";
+function nodeSubtitle(
+  node: PositionedNode,
+  groupById: Map<string, GroupResponse>,
+  layout: LayoutResult,
+) {
+  if (node.isOrigin) {
+    return `${node.childrenIds.length} connected branches`;
   }
+
+  if (node.kind === "question") {
+    const questionText = node.question ?? node.title;
+    const answer = findAnsweredQuestion(
+      node.groupId ? groupById.get(node.groupId) : undefined,
+      questionText,
+    );
+
+    if (!answer) {
+      return "Question";
+    }
+
+    return `${Math.round(answer.confidence * 100)}% • ${answer.sources.length} src`;
+  }
+
+  const questionCount = countDescendantQuestions(node.id, layout.nodeById);
+  return `${node.childrenIds.length} branches • ${questionCount} q`;
+}
+
+function countDescendantQuestions(nodeId: string, nodeById: Map<string, PositionedNode>): number {
+  const node = nodeById.get(nodeId);
+  if (!node) {
+    return 0;
+  }
+
+  if (node.kind === "question") {
+    return 1;
+  }
+
+  return node.childrenIds.reduce(
+    (sum, childId) => sum + countDescendantQuestions(childId, nodeById),
+    0,
+  );
+}
+
+function selectionFocusTarget(nodeId: string, layout: LayoutResult) {
+  const node = layout.nodeById.get(nodeId);
+  if (!node) {
+    return null;
+  }
+
+  if (node.isOrigin) {
+    const children = node.childrenIds
+      .map((id) => layout.nodeById.get(id))
+      .filter((child): child is PositionedNode => Boolean(child));
+
+    if (children.length === 0) {
+      return { x: node.x, y: node.y };
+    }
+
+    const avgY = children.reduce((sum, child) => sum + child.y, 0) / children.length;
+    const avgX = children.reduce((sum, child) => sum + child.x, 0) / children.length;
+
+    return { x: (node.x + avgX) / 2, y: avgY };
+  }
+
+  if (node.childrenIds.length === 0) {
+    return { x: node.x, y: node.y };
+  }
+
+  const children = node.childrenIds
+    .map((id) => layout.nodeById.get(id))
+    .filter((child): child is PositionedNode => Boolean(child));
+
+  if (children.length === 0) {
+    return { x: node.x, y: node.y };
+  }
+
+  const avgY = children.reduce((sum, child) => sum + child.y, 0) / children.length;
+  const avgX = children.reduce((sum, child) => sum + child.x, 0) / children.length;
+
+  return { x: (node.x + avgX) / 2, y: avgY };
+}
+
+function clampCenter(center: { x: number; y: number }, bounds: LayoutResult["bounds"]) {
+  return {
+    x: Math.min(bounds.maxX, Math.max(bounds.minX, center.x)),
+    y: Math.min(bounds.maxY, Math.max(bounds.minY, center.y)),
+  };
+}
+
+function easeInOutCubic(value: number) {
+  return value < 0.5
+    ? 4 * value * value * value
+    : 1 - Math.pow(-2 * value + 2, 3) / 2;
 }
 
 function findNodeById(nodes: FootprintTreeNode[], targetId: string): FootprintTreeNode | null {

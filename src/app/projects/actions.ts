@@ -7,13 +7,16 @@ import { DEFAULT_CHECKLIST_ITEMS } from "@/lib/checklist-defaults";
 import OpenAI from "openai";
 import {
   buildGroupPrompt,
+  buildOriginSummaryPrompt,
   GROUP_JSON_SCHEMA,
+  ORIGIN_SUMMARY_JSON_SCHEMA,
   FOOTPRINT_GROUPS,
 } from "@/lib/footprint-prompt";
 import type {
   GroupResponse,
   FootprintFullResponse,
   FootprintGroup,
+  FootprintOriginSummary,
 } from "@/lib/footprint-prompt";
 import { analyzeSeoAeoUrl } from "@/lib/seo-aeo-analyzer";
 
@@ -533,7 +536,10 @@ function coerceGroupResponse(raw: GroupResponse, group: FootprintGroup): GroupRe
   }
 
   return {
-    summary: typeof raw.summary === "string" && raw.summary.trim() ? raw.summary.trim() : "No summary provided.",
+    summary:
+      typeof raw.summary === "string" && raw.summary.trim()
+        ? raw.summary.trim()
+        : "No summary provided.",
     questions: group.questions.map((expectedQuestion, index) => {
       const item = raw.questions[index];
       const confidence =
@@ -551,6 +557,29 @@ function coerceGroupResponse(raw: GroupResponse, group: FootprintGroup): GroupRe
         sources: Array.isArray(item.sources) ? item.sources : [],
       };
     }),
+  };
+}
+
+function coerceOriginSummary(raw: FootprintOriginSummary): FootprintOriginSummary {
+  const confidence =
+    typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
+      ? Math.max(0, Math.min(1, raw.confidence))
+      : 0;
+
+  const sources = Array.isArray(raw.sources)
+    ? raw.sources.filter(
+        (source): source is FootprintOriginSummary["sources"][number] =>
+          Boolean(source?.url && source?.title && source?.type),
+      )
+    : [];
+
+  return {
+    summary:
+      typeof raw.summary === "string" && raw.summary.trim()
+        ? raw.summary.trim()
+        : "No overall summary provided.",
+    confidence,
+    sources,
   };
 }
 
@@ -661,30 +690,61 @@ export async function requestFootprint(
       return { error: "All analysis groups failed. Please try again." };
     }
 
+    const resolvedGroups = groupsToUse.map((group) => {
+      const result = groupResults.find((r) => r.groupId === group.id);
+      if (result?.parsed) {
+        return result.parsed;
+      }
+      return {
+        summary: "This group could not be analyzed. Please re-analyze.",
+        questions: group.questions.map((q) => ({
+          question: q,
+          answer: "Analysis failed for this question.",
+          confidence: 0,
+          sources: [],
+        })),
+      };
+    });
+
+    let originSummaryRaw: string | null = null;
+    let originSummary: FootprintOriginSummary | undefined;
+
+    try {
+      const originPrompt = buildOriginSummaryPrompt(
+        companyName,
+        prodUrl,
+        groupsToUse,
+        resolvedGroups,
+      );
+
+      const originResponse = await openai.responses.create({
+        model: MODEL,
+        input: originPrompt,
+        text: { format: ORIGIN_SUMMARY_JSON_SCHEMA },
+      });
+
+      originSummaryRaw = originResponse.output_text || null;
+      if (originSummaryRaw) {
+        const parsedOrigin = JSON.parse(originSummaryRaw) as FootprintOriginSummary;
+        originSummary = coerceOriginSummary(parsedOrigin);
+      }
+    } catch {
+      originSummary = undefined;
+    }
+
     const fullResponse: FootprintFullResponse = {
-      groups: groupsToUse.map((group) => {
-        const result = groupResults.find((r) => r.groupId === group.id);
-        if (result?.parsed) {
-          return result.parsed;
-        }
-        return {
-          summary: "This group could not be analyzed. Please re-analyze.",
-          questions: group.questions.map((q) => ({
-            question: q,
-            answer: "Analysis failed for this question.",
-            confidence: 0,
-            sources: [],
-          })),
-        };
-      }),
+      groups: resolvedGroups,
       group_meta: groupsToUse,
+      ...(originSummary ? { origin_summary: originSummary } : {}),
     };
 
-    const rawResponses = Object.fromEntries(
-      groupResults
-        .filter((r) => r.raw !== null)
-        .map((r) => [r.groupId, r.raw])
+    const rawResponses: Record<string, string> = Object.fromEntries(
+      groupResults.filter((r) => r.raw !== null).map((r) => [r.groupId, r.raw]),
     );
+
+    if (originSummaryRaw) {
+      rawResponses.origin_summary = originSummaryRaw;
+    }
 
     const status = failed.length > 0 ? "completed" : "completed";
     const errorNote =
