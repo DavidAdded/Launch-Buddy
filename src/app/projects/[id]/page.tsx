@@ -34,11 +34,17 @@ export default async function ProjectDetailPage({
     redirect("/projects");
   }
 
-  const customerName = (project.customers as unknown as { name: string } | null)?.name ?? null;
+  const customerName =
+    (project.customers as unknown as { name: string } | null)?.name ?? null;
 
   const isOwner = project.user_id === user.id;
 
-  const [{ count: fileCount }, { data: checklistItems }, { count: footprintCount }, { data: customers }] = await Promise.all([
+  const [
+    { count: fileCount },
+    { data: checklistItems },
+    { count: footprintCount },
+    { data: customers },
+  ] = await Promise.all([
     supabase
       .from("project_files")
       .select("*", { count: "exact", head: true })
@@ -51,10 +57,7 @@ export default async function ProjectDetailPage({
       .from("footprint_requests")
       .select("*", { count: "exact", head: true })
       .eq("project_id", id),
-    supabase
-      .from("customers")
-      .select("id, name")
-      .order("name"),
+    supabase.from("customers").select("id, name").order("name"),
   ]);
 
   const totalChecklist = checklistItems?.length ?? 0;
@@ -73,8 +76,7 @@ export default async function ProjectDetailPage({
   }[] = [
     {
       title: "Files",
-      description:
-        "Upload and manage project files, documents, and assets.",
+      description: "Upload and manage project files, documents, and assets.",
       href: `/projects/${id}/files`,
       stat: `${fileCount ?? 0} file${(fileCount ?? 0) === 1 ? "" : "s"}`,
       icon: "folder",
@@ -114,7 +116,7 @@ export default async function ProjectDetailPage({
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <Breadcrumbs
             items={[
               { label: "Home", href: "/" },
@@ -141,7 +143,7 @@ export default async function ProjectDetailPage({
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         {error && (
           <p className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-950 dark:text-red-400">
             {error}
@@ -150,7 +152,12 @@ export default async function ProjectDetailPage({
 
         <div className="mb-10 flex items-start justify-between">
           <div className="flex-1">
-            <ProjectSettings project={project} isOwner={isOwner} customers={customers ?? []} customerName={customerName} />
+            <ProjectSettings
+              project={project}
+              isOwner={isOwner}
+              customers={customers ?? []}
+              customerName={customerName}
+            />
           </div>
           {isOwner && (
             <form action={deleteProjectWithId} className="ml-4 shrink-0">

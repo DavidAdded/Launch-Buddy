@@ -30,12 +30,13 @@ export default async function DigitalFootprintPage({
     redirect("/projects");
   }
 
-  const customerName = (project.customers as unknown as { name: string } | null)?.name ?? null;
+  const customerName =
+    (project.customers as unknown as { name: string } | null)?.name ?? null;
 
   const { data: requests } = await supabase
     .from("footprint_requests")
     .select(
-      "id, model_name, company_name, status, error_message, parsed_response, created_at"
+      "id, model_name, company_name, status, error_message, parsed_response, created_at",
     )
     .eq("project_id", id)
     .order("created_at", { ascending: false });
@@ -43,7 +44,7 @@ export default async function DigitalFootprintPage({
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <Breadcrumbs
             items={[
               { label: "Home", href: "/" },
@@ -71,7 +72,7 @@ export default async function DigitalFootprintPage({
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         <FootprintView
           projectId={id}
           companyName={customerName}

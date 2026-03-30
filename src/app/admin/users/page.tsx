@@ -21,7 +21,9 @@ export default async function AdminUsersPage() {
 
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("id, first_name, last_name, email, is_admin, scopes, fortnox_id, updated_at")
+    .select(
+      "id, first_name, last_name, email, is_admin, scopes, fortnox_id, updated_at",
+    )
     .order("is_admin", { ascending: false })
     .order("email", { ascending: true });
 
@@ -31,7 +33,7 @@ export default async function AdminUsersPage() {
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <Breadcrumbs
             items={[
               { label: "Home", href: "/" },
@@ -58,7 +60,7 @@ export default async function AdminUsersPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         <section className="mb-10">
           <h2 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-50">
             Invite User
@@ -85,11 +87,19 @@ export default async function AdminUsersPage() {
                 >
                   <div className="flex items-center gap-4">
                     <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-900 text-sm font-medium text-white dark:bg-zinc-100 dark:text-zinc-900">
-                      {getInitials(profile.first_name, profile.last_name, profile.email)}
+                      {getInitials(
+                        profile.first_name,
+                        profile.last_name,
+                        profile.email,
+                      )}
                     </div>
                     <div>
                       <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                        {formatName(profile.first_name, profile.last_name, profile.email)}
+                        {formatName(
+                          profile.first_name,
+                          profile.last_name,
+                          profile.email,
+                        )}
                       </p>
                       <p className="text-sm text-zinc-500 dark:text-zinc-400">
                         {profile.email ?? "No email"}
@@ -103,12 +113,23 @@ export default async function AdminUsersPage() {
                     >
                       Edit Profile
                     </Link>
-                    <FortnoxIdField userId={profile.id} fortnoxId={profile.fortnox_id ?? ""} />
-                    <ScopeToggles userId={profile.id} scopes={Array.isArray(profile.scopes) ? profile.scopes : []} />
+                    <FortnoxIdField
+                      userId={profile.id}
+                      fortnoxId={profile.fortnox_id ?? ""}
+                    />
+                    <ScopeToggles
+                      userId={profile.id}
+                      scopes={
+                        Array.isArray(profile.scopes) ? profile.scopes : []
+                      }
+                    />
                     <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400">
                       Admin
                     </span>
-                    <DeleteUserButton userId={profile.id} isSelf={profile.id === user.id} />
+                    <DeleteUserButton
+                      userId={profile.id}
+                      isSelf={profile.id === user.id}
+                    />
                   </div>
                 </div>
               ))}
@@ -139,11 +160,19 @@ export default async function AdminUsersPage() {
                 >
                   <div className="flex items-center gap-4">
                     <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-100 text-sm font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                      {getInitials(profile.first_name, profile.last_name, profile.email)}
+                      {getInitials(
+                        profile.first_name,
+                        profile.last_name,
+                        profile.email,
+                      )}
                     </div>
                     <div>
                       <p className="font-medium text-zinc-900 dark:text-zinc-50">
-                        {formatName(profile.first_name, profile.last_name, profile.email)}
+                        {formatName(
+                          profile.first_name,
+                          profile.last_name,
+                          profile.email,
+                        )}
                       </p>
                       <p className="text-sm text-zinc-500 dark:text-zinc-400">
                         {profile.email ?? "No email"}
@@ -157,9 +186,20 @@ export default async function AdminUsersPage() {
                     >
                       Edit Profile
                     </Link>
-                    <FortnoxIdField userId={profile.id} fortnoxId={profile.fortnox_id ?? ""} />
-                    <ScopeToggles userId={profile.id} scopes={Array.isArray(profile.scopes) ? profile.scopes : []} />
-                    <DeleteUserButton userId={profile.id} isSelf={profile.id === user.id} />
+                    <FortnoxIdField
+                      userId={profile.id}
+                      fortnoxId={profile.fortnox_id ?? ""}
+                    />
+                    <ScopeToggles
+                      userId={profile.id}
+                      scopes={
+                        Array.isArray(profile.scopes) ? profile.scopes : []
+                      }
+                    />
+                    <DeleteUserButton
+                      userId={profile.id}
+                      isSelf={profile.id === user.id}
+                    />
                   </div>
                 </div>
               ))}
@@ -174,7 +214,7 @@ export default async function AdminUsersPage() {
 function getInitials(
   firstName: string | null,
   lastName: string | null,
-  email: string | null
+  email: string | null,
 ): string {
   if (firstName && lastName) {
     return `${firstName[0]}${lastName[0]}`.toUpperCase();
@@ -187,7 +227,7 @@ function getInitials(
 function formatName(
   firstName: string | null,
   lastName: string | null,
-  email: string | null
+  email: string | null,
 ): string {
   const parts = [firstName, lastName].filter(Boolean);
   if (parts.length > 0) return parts.join(" ");

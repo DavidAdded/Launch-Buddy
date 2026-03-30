@@ -18,11 +18,7 @@ export default async function ProjectsPage() {
       .from("projects")
       .select("*, customers(name)")
       .order("created_at", { ascending: false }),
-    supabase
-      .from("profiles")
-      .select("scopes")
-      .eq("id", user.id)
-      .single(),
+    supabase.from("profiles").select("scopes").eq("id", user.id).single(),
   ]);
 
   const scopes: string[] = Array.isArray(profile?.scopes) ? profile.scopes : [];
@@ -39,12 +35,9 @@ export default async function ProjectsPage() {
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <Breadcrumbs
-            items={[
-              { label: "Home", href: "/" },
-              { label: "Projects" },
-            ]}
+            items={[{ label: "Home", href: "/" }, { label: "Projects" }]}
           />
           <div className="flex items-center gap-4">
             <span className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -68,7 +61,7 @@ export default async function ProjectsPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         <div className="mb-8 flex items-center justify-between">
           <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50">
             My Projects

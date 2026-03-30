@@ -33,7 +33,7 @@ export default async function SeoAeoPage({
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <Breadcrumbs
             items={[
               { label: "Home", href: "/" },
@@ -61,7 +61,7 @@ export default async function SeoAeoPage({
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         <SeoAeoView projectId={id} defaultUrl={project.prod_url} />
       </main>
     </div>

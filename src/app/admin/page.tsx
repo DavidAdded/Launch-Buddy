@@ -46,8 +46,10 @@ export default async function AdminPage() {
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-          <Breadcrumbs items={[{ label: "Home", href: "/" }, { label: "Admin" }]} />
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
+          <Breadcrumbs
+            items={[{ label: "Home", href: "/" }, { label: "Admin" }]}
+          />
           <div className="flex items-center gap-3">
             <Link
               href="/profile"
@@ -67,14 +69,10 @@ export default async function AdminPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {cards.map((card) => (
-            <Link
-              key={card.title}
-              href={card.href}
-              className="no-underline"
-            >
+            <Link key={card.title} href={card.href} className="no-underline">
               <div className="group relative flex cursor-pointer flex-col rounded-2xl border border-zinc-200 bg-white p-6 transition-all hover:border-zinc-300 hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700">
                 <div className="mb-4 flex items-center justify-between">
                   <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-zinc-100 dark:bg-zinc-800">

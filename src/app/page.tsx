@@ -12,11 +12,7 @@ export default async function HomePage() {
   if (!user) redirect("/login");
 
   const [{ data: profile }, isAdmin] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("scopes")
-      .eq("id", user.id)
-      .single(),
+    supabase.from("profiles").select("scopes").eq("id", user.id).single(),
     getIsAdmin(),
   ]);
 
@@ -31,21 +27,24 @@ export default async function HomePage() {
   }[] = [
     {
       title: "Projects",
-      description: "Create and manage your launch projects, checklists, and digital footprints.",
+      description:
+        "Create and manage your launch projects, checklists, and digital footprints.",
       href: "/projects",
       icon: "projects",
       visible: scopes.includes("projects"),
     },
     {
       title: "To-do List",
-      description: "Manage your personal tasks and collaborate with shared to-dos.",
+      description:
+        "Manage your personal tasks and collaborate with shared to-dos.",
       href: "/todos",
       icon: "todos",
       visible: scopes.includes("todos"),
     },
     {
       title: "Fortnox",
-      description: "Manage invoices, customers, and accounting through Fortnox.",
+      description:
+        "Manage invoices, customers, and accounting through Fortnox.",
       href: "/fortnox",
       icon: "fortnox",
       visible: scopes.includes("fortnox"),
@@ -64,7 +63,7 @@ export default async function HomePage() {
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <h1 className="text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
             Launch Buddy
           </h1>
@@ -90,11 +89,12 @@ export default async function HomePage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         {visibleCards.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-zinc-300 p-12 text-center dark:border-zinc-700">
             <p className="text-zinc-500 dark:text-zinc-400">
-              You don&apos;t have access to any modules yet. Contact an admin to get started.
+              You don&apos;t have access to any modules yet. Contact an admin to
+              get started.
             </p>
           </div>
         ) : (
@@ -145,7 +145,18 @@ function HomeCardIcon({ type }: { type: string }) {
 
   if (type === "projects") {
     return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+      >
         <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
       </svg>
     );
@@ -153,7 +164,18 @@ function HomeCardIcon({ type }: { type: string }) {
 
   if (type === "fortnox") {
     return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+      >
         <rect width="20" height="14" x="2" y="5" rx="2" />
         <path d="M2 10h20" />
       </svg>
@@ -162,7 +184,18 @@ function HomeCardIcon({ type }: { type: string }) {
 
   if (type === "todos") {
     return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+      >
         <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
         <path d="m9 12 2 2 4-4" />
       </svg>
@@ -171,7 +204,18 @@ function HomeCardIcon({ type }: { type: string }) {
 
   if (type === "admin") {
     return (
-      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={className}
+      >
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
         <circle cx="12" cy="12" r="3" />
       </svg>

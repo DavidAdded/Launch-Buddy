@@ -1,13 +1,19 @@
 "use client";
 
 import { useState, useTransition, useMemo } from "react";
-import { requestFootprint } from "../../actions";
-import type { FootprintFullResponse, Source } from "@/lib/footprint-prompt";
+import { requestFootprint, generateFootprintNarrative } from "../../actions";
+import type { FootprintFullResponse, FootprintGroup, Source } from "@/lib/footprint-prompt";
 import {
   FOOTPRINT_GROUPS,
   FOOTPRINT_TOTAL_GROUPS,
   FOOTPRINT_TOTAL_QUESTIONS,
 } from "@/lib/footprint-prompt";
+import {
+  buildTreeFromGroups,
+  parseFootprintHierarchyCsv,
+  type FootprintTreeNode,
+} from "@/lib/footprint-hierarchy";
+import { FootprintSplitExplorer } from "./footprint-split-explorer";
 import {
   Chart as ChartJS,
   RadialLinearScale,
@@ -36,7 +42,16 @@ type FootprintRequest = {
   company_name: string;
   status: string;
   error_message: string | null;
-  parsed_response: FootprintFullResponse | null;
+  parsed_response:
+    | (FootprintFullResponse & {
+        narrative_report?: {
+          content: string;
+          model: string;
+          generated_at: string;
+          source_request_id: string;
+        };
+      })
+    | null;
   created_at: string;
 };
 
@@ -52,32 +67,110 @@ export function FootprintView({
   requests: FootprintRequest[];
 }) {
   const [isPending, startTransition] = useTransition();
+  const [isNarrativePending, startNarrativeTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [narrativeError, setNarrativeError] = useState<string | null>(null);
+  const [narrativeReport, setNarrativeReport] = useState<string | null>(null);
+  const [narrativeMeta, setNarrativeMeta] = useState<{
+    sourceRequestId: string;
+    model: string;
+    generatedAt: string;
+  } | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const [customGroups, setCustomGroups] = useState<FootprintGroup[] | null>(null);
+  const [customTree, setCustomTree] = useState<FootprintTreeNode[] | null>(null);
+  const [csvWarnings, setCsvWarnings] = useState<string[]>([]);
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
 
   const latest = requests[selectedIndex] ?? null;
   const parsed = latest?.parsed_response ?? null;
+  const persistedNarrative = parsed?.narrative_report ?? null;
+  const effectiveNarrativeReport = narrativeReport ?? persistedNarrative?.content ?? null;
+  const effectiveNarrativeMeta =
+    narrativeMeta ??
+    (persistedNarrative
+      ? {
+          sourceRequestId: persistedNarrative.source_request_id,
+          model: persistedNarrative.model,
+          generatedAt: persistedNarrative.generated_at,
+        }
+      : null);
+  const hasNarrativeForSelected =
+    Boolean(latest?.id) &&
+    effectiveNarrativeMeta?.sourceRequestId === latest?.id &&
+    Boolean(effectiveNarrativeReport);
+  const configuredGroups = customGroups ?? FOOTPRINT_GROUPS;
+  const configuredTree = customTree ?? buildTreeFromGroups(configuredGroups);
+  const requestGroups = useMemo(() => {
+    if (!parsed) {
+      return configuredGroups;
+    }
+
+    if (parsed.group_meta && parsed.group_meta.length > 0) {
+      return parsed.group_meta;
+    }
+
+    return inferGroupsFromParsed(parsed);
+  }, [configuredGroups, parsed]);
+  const requestTree = useMemo(() => {
+    if (!parsed) {
+      return configuredTree;
+    }
+    return buildTreeFromGroups(requestGroups);
+  }, [configuredTree, parsed, requestGroups]);
 
   function handleRequest() {
     setError(null);
     startTransition(async () => {
-      const result = await requestFootprint(projectId);
+      const result = await requestFootprint(projectId, customGroups ?? FOOTPRINT_GROUPS);
       if (result.error) {
         setError(result.error);
       }
     });
   }
 
-  function toggleGroup(groupId: string) {
-    setOpenGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(groupId)) {
-        next.delete(groupId);
-      } else {
-        next.add(groupId);
+  async function handleCsvUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    const raw = await file.text();
+    const parsedCsv = parseFootprintHierarchyCsv(raw);
+
+    if (parsedCsv.groups.length === 0) {
+      setError(parsedCsv.warnings[0] ?? "CSV could not be parsed.");
+      return;
+    }
+
+    setError(null);
+    setCustomGroups(parsedCsv.groups);
+    setCustomTree(parsedCsv.tree);
+    setCsvWarnings(parsedCsv.warnings);
+    setCsvFileName(file.name);
+  }
+
+  function handleGenerateNarrative() {
+    if (!latest?.id) {
+      setNarrativeError("No analysis selected.");
+      return;
+    }
+
+    setNarrativeError(null);
+    startNarrativeTransition(async () => {
+      const result = await generateFootprintNarrative(projectId, latest.id);
+      if (result.error || !result.report) {
+        setNarrativeReport(null);
+        setNarrativeMeta(null);
+        setNarrativeError(result.error ?? "Failed to generate report.");
+        return;
       }
-      return next;
+
+      setNarrativeReport(result.report);
+      setNarrativeMeta({
+        sourceRequestId: result.sourceRequestId ?? latest.id,
+        model: result.model ?? "gpt-5.2",
+        generatedAt: result.generatedAt ?? new Date().toISOString(),
+      });
     });
   }
 
@@ -86,6 +179,12 @@ export function FootprintView({
       {error && (
         <p className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-950 dark:text-red-400">
           {error}
+        </p>
+      )}
+
+      {narrativeError && (
+        <p className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-950 dark:text-red-400">
+          {narrativeError}
         </p>
       )}
 
@@ -112,6 +211,44 @@ export function FootprintView({
               ? "Request Analysis"
               : "Re-analyze"}
         </button>
+      </div>
+
+      <div className="mb-6 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+              CSV hierarchy upload
+            </h4>
+            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+              Upload CSV with level/nav columns + question column to define custom hierarchy.
+            </p>
+          </div>
+          <label className="inline-flex cursor-pointer items-center rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+            Upload CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0] ?? null;
+                void handleCsvUpload(file);
+                event.target.value = "";
+              }}
+            />
+          </label>
+        </div>
+
+        <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+          Active configuration: {csvFileName ? `${csvFileName} (${configuredGroups.length} categories)` : `Default 5-category model (${FOOTPRINT_TOTAL_QUESTIONS} questions)`}
+        </p>
+
+        {csvWarnings.length > 0 && (
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-600 dark:text-amber-400">
+            {csvWarnings.map((warning, index) => (
+              <li key={`${warning}-${index}`}>{warning}</li>
+            ))}
+          </ul>
+        )}
       </div>
 
       {(!companyName || !prodUrl) && (
@@ -161,7 +298,10 @@ export function FootprintView({
             <button
               key={req.id}
               type="button"
-              onClick={() => setSelectedIndex(i)}
+              onClick={() => {
+                setSelectedIndex(i);
+                setNarrativeError(null);
+              }}
               className={`cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                 i === selectedIndex
                   ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
@@ -200,89 +340,50 @@ export function FootprintView({
 
       {parsed && (
         <div className="flex flex-col gap-4">
-          {parsed.groups.map((group, groupIndex) => {
-            const meta = FOOTPRINT_GROUPS[groupIndex];
-            if (!meta) return null;
-            const isOpen = openGroups.has(meta.id);
-            const avgConfidence =
-              group.questions.length > 0
-                ? group.questions.reduce((sum, q) => sum + q.confidence, 0) /
-                  group.questions.length
-                : 0;
+          <FootprintSplitExplorer
+            key={`${latest?.id ?? "no-request"}-${requestGroups.map((group) => group.id).join("|")}`}
+            parsed={parsed}
+            groupMeta={requestGroups}
+            tree={requestTree}
+          />
 
-            return (
-              <div
-                key={meta.id}
-                className="overflow-hidden rounded-2xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(meta.id)}
-                  className="flex w-full cursor-pointer items-center justify-between px-5 py-4 text-left transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">{meta.emoji}</span>
-                    <div>
-                      <h4 className="text-sm font-medium text-zinc-900 dark:text-zinc-50">
-                        {meta.title}
-                      </h4>
-                      <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
-                        {group.summary}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="ml-4 flex shrink-0 items-center gap-3">
-                    <ConfidenceBar confidence={avgConfidence} />
-                    <span className="text-xs text-zinc-400 dark:text-zinc-500">
-                      {group.questions.length}q
-                    </span>
-                    <svg
-                      className={`h-4 w-4 text-zinc-400 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M19 9l-7 7-7-7"
-                      />
-                    </svg>
-                  </div>
-                </button>
-
-                <div
-                  className={`grid transition-[grid-template-rows] duration-200 ease-out ${isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}
-                >
-                  <div className="overflow-hidden">
-                    <div className="border-t border-zinc-100 px-5 pb-5 pt-4 dark:border-zinc-800">
-                      <div className="flex flex-col gap-4">
-                        {group.questions.map((q, qIndex) => (
-                          <div key={qIndex} className="flex flex-col gap-1.5">
-                            <div className="flex items-start justify-between gap-3">
-                              <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-                                {q.question}
-                              </p>
-                              <span className="shrink-0 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                {Math.round(q.confidence * 100)}%
-                              </span>
-                            </div>
-                            <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                              {q.answer}
-                            </p>
-                            <SourceLinks sources={q.sources} />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+          <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                  AI Perception Report
+                </h4>
+                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                  Send this full analysis back to OpenAI and generate a leadership-ready synthesis of AI&apos;s current picture of the brand.
+                </p>
               </div>
-            );
-          })}
+              <button
+                type="button"
+                onClick={handleGenerateNarrative}
+                disabled={isNarrativePending}
+                className="cursor-pointer rounded-full bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+              >
+                {isNarrativePending
+                  ? "Generating report..."
+                  : "Generate AI Perception Report"}
+              </button>
+            </div>
 
-          <FootprintCharts parsed={parsed} />
+            {hasNarrativeForSelected && effectiveNarrativeReport && (
+              <div className="mt-4 rounded-xl border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-950">
+                <NarrativeReportView report={effectiveNarrativeReport} />
+                {effectiveNarrativeMeta && (
+                  <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+                    Generated with {effectiveNarrativeMeta.model} at{" "}
+                    {new Date(effectiveNarrativeMeta.generatedAt).toLocaleString()} from
+                    request {effectiveNarrativeMeta.sourceRequestId}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          <FootprintCharts parsed={parsed} groupMeta={requestGroups} />
 
           <div className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
             <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -297,20 +398,13 @@ export function FootprintView({
   );
 }
 
-function ConfidenceBar({ confidence }: { confidence: number }) {
-  return (
-    <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-        <div
-          className="h-full rounded-full bg-zinc-400 dark:bg-zinc-500"
-          style={{ width: `${confidence * 100}%` }}
-        />
-      </div>
-      <span className="text-xs text-zinc-400 dark:text-zinc-500">
-        {Math.round(confidence * 100)}%
-      </span>
-    </div>
-  );
+function inferGroupsFromParsed(parsed: FootprintFullResponse): FootprintGroup[] {
+  return parsed.groups.map((group, index) => ({
+    id: `group_${index + 1}`,
+    title: `Category ${index + 1}`,
+    emoji: "📌",
+    questions: group.questions.map((question) => question.question),
+  }));
 }
 
 const SOURCE_TYPE_COLORS: Record<Source["type"], string> = {
@@ -322,7 +416,13 @@ const SOURCE_TYPE_COLORS: Record<Source["type"], string> = {
   other: "#6b7280",
 };
 
-function FootprintCharts({ parsed }: { parsed: FootprintFullResponse }) {
+function FootprintCharts({
+  parsed,
+  groupMeta,
+}: {
+  parsed: FootprintFullResponse;
+  groupMeta: FootprintGroup[];
+}) {
   const { totalSources, radarData, doughnutData } = useMemo(() => {
     const counts: Record<Source["type"], number> = {
       company_site: 0,
@@ -353,7 +453,7 @@ function FootprintCharts({ parsed }: { parsed: FootprintFullResponse }) {
           ? group.questions.reduce((sum, q) => sum + q.confidence, 0) /
             group.questions.length
           : 0;
-      return { label: FOOTPRINT_GROUPS[i]?.title ?? `Group ${i + 1}`, avg };
+      return { label: groupMeta[i]?.title ?? `Group ${i + 1}`, avg };
     });
 
     const activeTypes = (Object.keys(counts) as Source["type"][]).filter(
@@ -393,7 +493,7 @@ function FootprintCharts({ parsed }: { parsed: FootprintFullResponse }) {
       radarData: radar,
       doughnutData: doughnut,
     };
-  }, [parsed]);
+  }, [groupMeta, parsed]);
 
   const radarOptions = {
     responsive: true,
@@ -491,26 +591,180 @@ const sourceTypeLabels: Record<Source["type"], string> = {
   other: "Other",
 };
 
-function SourceLinks({ sources }: { sources: Source[] }) {
-  if (!sources || sources.length === 0) return null;
+type NarrativeSection = {
+  title: string;
+  evidenceNote: string | null;
+  bullets: string[];
+  numbered: string[];
+  paragraphs: string[];
+};
+
+function NarrativeReportView({ report }: { report: string }) {
+  const sections = useMemo(() => parseNarrativeReport(report), [report]);
+
+  if (sections.length === 0) {
+    return (
+      <pre className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+        {report}
+      </pre>
+    );
+  }
+
+  const executive = sections.find((section) => /executive summary/i.test(section.title));
 
   return (
-    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-      {sources.map((src, i) => (
-        <a
-          key={`${src.url}-${i}`}
-          href={src.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-blue-600 underline decoration-blue-300 underline-offset-2 transition-colors hover:text-blue-800 dark:text-blue-400 dark:decoration-blue-700 dark:hover:text-blue-300"
-          title={src.title}
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+        <h5 className="text-xs font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+          Report navigation
+        </h5>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {sections.map((section) => (
+            <a
+              key={section.title}
+              href={`#report-section-${slugify(section.title)}`}
+              className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            >
+              {section.title}
+            </a>
+          ))}
+        </div>
+      </div>
+
+      {executive && executive.bullets.length > 0 && (
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+          <h5 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+            Executive Summary Highlights
+          </h5>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {executive.bullets.map((bullet, i) => (
+              <div
+                key={`${bullet}-${i}`}
+                className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800/70 dark:text-zinc-300"
+              >
+                {bullet}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {sections.map((section) => (
+        <article
+          key={section.title}
+          id={`report-section-${slugify(section.title)}`}
+          className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-700 dark:bg-zinc-900"
         >
-          <span className="rounded bg-zinc-100 px-1 py-0.5 text-[10px] font-medium text-zinc-500 no-underline dark:bg-zinc-800 dark:text-zinc-400">
-            {sourceTypeLabels[src.type] ?? src.type}
-          </span>
-          <span className="max-w-[200px] truncate">{src.title}</span>
-        </a>
+          <h5 className="text-base font-semibold text-zinc-900 dark:text-zinc-50">
+            {section.title}
+          </h5>
+
+          {section.evidenceNote && (
+            <p className="mt-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-300">
+              {section.evidenceNote}
+            </p>
+          )}
+
+          {section.paragraphs.map((paragraph, index) => (
+            <p
+              key={`${section.title}-p-${index}`}
+              className="mt-3 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300"
+            >
+              {paragraph}
+            </p>
+          ))}
+
+          {section.bullets.length > 0 && (
+            <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+              {section.bullets.map((bullet, index) => (
+                <li key={`${section.title}-b-${index}`}>{bullet}</li>
+              ))}
+            </ul>
+          )}
+
+          {section.numbered.length > 0 && (
+            <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-zinc-700 dark:text-zinc-300">
+              {section.numbered.map((item, index) => (
+                <li key={`${section.title}-n-${index}`}>{item}</li>
+              ))}
+            </ol>
+          )}
+        </article>
       ))}
     </div>
   );
+}
+
+function parseNarrativeReport(report: string): NarrativeSection[] {
+  const normalized = report.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+
+  const sections: NarrativeSection[] = [];
+  let current: NarrativeSection | null = null;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    if (/^#{1,3}\s+/.test(line)) {
+      if (current) sections.push(current);
+      current = {
+        title: line.replace(/^#{1,3}\s+/, "").trim(),
+        evidenceNote: null,
+        bullets: [],
+        numbered: [],
+        paragraphs: [],
+      };
+      continue;
+    }
+
+    if (!current) {
+      current = {
+        title: "Overview",
+        evidenceNote: null,
+        bullets: [],
+        numbered: [],
+        paragraphs: [],
+      };
+    }
+
+    const evidenceMatch = line.match(/\*\*Evidence-strength note:\*\*\s*(.+)$/i);
+    if (evidenceMatch) {
+      current.evidenceNote = evidenceMatch[1].trim();
+      continue;
+    }
+
+    const bulletMatch = line.match(/^[-*]\s+(.+)/);
+    if (bulletMatch) {
+      current.bullets.push(stripMarkdown(bulletMatch[1]));
+      continue;
+    }
+
+    const numberedMatch = line.match(/^\d+[\.)]\s+(.+)/);
+    if (numberedMatch) {
+      current.numbered.push(stripMarkdown(numberedMatch[1]));
+      continue;
+    }
+
+    current.paragraphs.push(stripMarkdown(line));
+  }
+
+  if (current) sections.push(current);
+  return sections;
+}
+
+function stripMarkdown(value: string) {
+  return value
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/`(.+?)`/g, "$1")
+    .trim();
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }

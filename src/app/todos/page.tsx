@@ -26,44 +26,47 @@ export default async function TodosPage() {
     { data: sharedItems },
     { data: allProfiles },
     { data: customers },
-  ] =
-    await Promise.all([
-      supabase
-        .from("todo_items")
-        .select("id, label, checked, assigned_to, user_id, position, customer_id")
-        .eq("user_id", user.id)
-        .order("position"),
-      supabase
-        .from("todo_items")
-        .select("id, label, checked, assigned_to, user_id, position, customer_id")
-        .eq("assigned_to", user.id)
-        .neq("user_id", user.id)
-        .order("position"),
-      supabase
-        .from("profiles")
-        .select("id, first_name, last_name")
-        .order("first_name"),
-      supabase.from("customers").select("id, name").order("name"),
-    ]);
+  ] = await Promise.all([
+    supabase
+      .from("todo_items")
+      .select("id, label, checked, assigned_to, user_id, position, customer_id")
+      .eq("user_id", user.id)
+      .order("position"),
+    supabase
+      .from("todo_items")
+      .select("id, label, checked, assigned_to, user_id, position, customer_id")
+      .eq("assigned_to", user.id)
+      .neq("user_id", user.id)
+      .order("position"),
+    supabase
+      .from("profiles")
+      .select("id, first_name, last_name")
+      .order("first_name"),
+    supabase.from("customers").select("id, name").order("name"),
+  ]);
 
   const profileMap = new Map(
     (allProfiles ?? []).map((p) => [
       p.id,
       [p.first_name, p.last_name].filter(Boolean).join(" ") || "Unnamed",
-    ])
+    ]),
   );
 
   const customerMap = new Map((customers ?? []).map((c) => [c.id, c.name]));
 
   const myItemsWithCustomer = (myItems ?? []).map((item) => ({
     ...item,
-    customer_name: item.customer_id ? customerMap.get(item.customer_id) ?? null : null,
+    customer_name: item.customer_id
+      ? (customerMap.get(item.customer_id) ?? null)
+      : null,
   }));
 
   const sharedWithMe = (sharedItems ?? []).map((item) => ({
     ...item,
     sharer_name: profileMap.get(item.user_id) ?? "Unknown",
-    customer_name: item.customer_id ? customerMap.get(item.customer_id) ?? null : null,
+    customer_name: item.customer_id
+      ? (customerMap.get(item.customer_id) ?? null)
+      : null,
   }));
 
   const users = (allProfiles ?? [])
@@ -82,12 +85,9 @@ export default async function TodosPage() {
   return (
     <div className="min-h-screen bg-zinc-50 font-sans dark:bg-black">
       <header className="border-b border-zinc-200 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+        <div className="mx-auto flex  items-center justify-between px-6 py-4">
           <Breadcrumbs
-            items={[
-              { label: "Home", href: "/" },
-              { label: "To-do List" },
-            ]}
+            items={[{ label: "Home", href: "/" }, { label: "To-do List" }]}
           />
           <div className="flex items-center gap-3">
             <Link
@@ -108,7 +108,7 @@ export default async function TodosPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-10">
+      <main className="mx-auto  px-6 py-10">
         <TodoList
           myItems={myItemsWithCustomer}
           sharedWithMe={sharedWithMe}
