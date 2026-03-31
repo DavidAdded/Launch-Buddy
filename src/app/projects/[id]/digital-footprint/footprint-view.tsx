@@ -2,7 +2,11 @@
 
 import { useState, useTransition, useMemo } from "react";
 import { requestFootprint, generateFootprintNarrative } from "../../actions";
-import type { FootprintFullResponse, FootprintGroup, Source } from "@/lib/footprint-prompt";
+import type {
+  FootprintFullResponse,
+  FootprintGroup,
+  Source,
+} from "@/lib/footprint-prompt";
 import {
   FOOTPRINT_GROUPS,
   FOOTPRINT_TOTAL_GROUPS,
@@ -77,15 +81,20 @@ export function FootprintView({
     generatedAt: string;
   } | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [customGroups, setCustomGroups] = useState<FootprintGroup[] | null>(null);
-  const [customTree, setCustomTree] = useState<FootprintTreeNode[] | null>(null);
+  const [customGroups, setCustomGroups] = useState<FootprintGroup[] | null>(
+    null,
+  );
+  const [customTree, setCustomTree] = useState<FootprintTreeNode[] | null>(
+    null,
+  );
   const [csvWarnings, setCsvWarnings] = useState<string[]>([]);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
 
   const latest = requests[selectedIndex] ?? null;
   const parsed = latest?.parsed_response ?? null;
   const persistedNarrative = parsed?.narrative_report ?? null;
-  const effectiveNarrativeReport = narrativeReport ?? persistedNarrative?.content ?? null;
+  const effectiveNarrativeReport =
+    narrativeReport ?? persistedNarrative?.content ?? null;
   const effectiveNarrativeMeta =
     narrativeMeta ??
     (persistedNarrative
@@ -116,13 +125,25 @@ export function FootprintView({
     if (!parsed) {
       return configuredTree;
     }
+
+    if (parsed.hierarchy_tree && parsed.hierarchy_tree.length > 0) {
+      return parsed.hierarchy_tree;
+    }
+
     return buildTreeFromGroups(requestGroups);
   }, [configuredTree, parsed, requestGroups]);
+
+  const showPerceptionReport = false;
+  const showFootprintCharts = false;
 
   function handleRequest() {
     setError(null);
     startTransition(async () => {
-      const result = await requestFootprint(projectId, customGroups ?? FOOTPRINT_GROUPS);
+      const result = await requestFootprint(
+        projectId,
+        customGroups ?? FOOTPRINT_GROUPS,
+        customTree ?? null,
+      );
       if (result.error) {
         setError(result.error);
       }
@@ -188,7 +209,7 @@ export function FootprintView({
         </p>
       )}
 
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6">
         <div>
           <h3 className="font-semibold text-zinc-900 dark:text-zinc-50">
             Digital Footprint
@@ -199,30 +220,21 @@ export function FootprintView({
             </p>
           )}
         </div>
-        <button
-          type="button"
-          onClick={handleRequest}
-          disabled={isPending || !companyName || !prodUrl}
-          className="cursor-pointer rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-        >
-          {isPending
-            ? "Analyzing..."
-            : requests.length === 0
-              ? "Request Analysis"
-              : "Re-analyze"}
-        </button>
-      </div>
 
-      <div className="mb-6 rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-              CSV hierarchy upload
-            </h4>
-            <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              Upload CSV with level/nav columns + question column to define custom hierarchy.
-            </p>
-          </div>
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleRequest}
+            disabled={isPending || !companyName || !prodUrl}
+            className="cursor-pointer rounded-full bg-zinc-900 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+          >
+            {isPending
+              ? "Analyzing..."
+              : requests.length === 0
+                ? "Request Analysis"
+                : "Re-analyze"}
+          </button>
+
           <label className="inline-flex cursor-pointer items-center rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
             Upload CSV
             <input
@@ -236,11 +248,13 @@ export function FootprintView({
               }}
             />
           </label>
-        </div>
 
-        <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-          Active configuration: {csvFileName ? `${csvFileName} (${configuredGroups.length} categories)` : `Default 5-category model (${FOOTPRINT_TOTAL_QUESTIONS} questions)`}
-        </p>
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">
+            {csvFileName
+              ? `${csvFileName} (${configuredGroups.length} categories)`
+              : `No CSV uploaded · Default ${FOOTPRINT_TOTAL_QUESTIONS}-question model`}
+          </span>
+        </div>
 
         {csvWarnings.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-600 dark:text-amber-400">
@@ -257,12 +271,12 @@ export function FootprintView({
             Set a{" "}
             <span className="font-medium text-zinc-700 dark:text-zinc-300">
               Company Name
-            </span>
-            {" "}and{" "}
+            </span>{" "}
+            and{" "}
             <span className="font-medium text-zinc-700 dark:text-zinc-300">
               Production URL
-            </span>
-            {" "}in project settings to enable footprint analysis.
+            </span>{" "}
+            in project settings to enable footprint analysis.
           </p>
         </div>
       )}
@@ -280,7 +294,8 @@ export function FootprintView({
         <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
           <div className="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-600 dark:border-zinc-700 dark:border-t-zinc-300" />
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Browsing website and analyzing {FOOTPRINT_TOTAL_QUESTIONS} questions across {FOOTPRINT_TOTAL_GROUPS} categories...
+            Browsing website and analyzing {FOOTPRINT_TOTAL_QUESTIONS} questions
+            across {FOOTPRINT_TOTAL_GROUPS} categories...
           </p>
           <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
             This may take 2-3 minutes as the model browses the web for each
@@ -339,7 +354,7 @@ export function FootprintView({
       )}
 
       {parsed && (
-        <div className="flex flex-col gap-4">
+        <div className="flex  flex-col gap-4">
           <FootprintSplitExplorer
             key={`${latest?.id ?? "no-request"}-${requestGroups.map((group) => group.id).join("|")}`}
             parsed={parsed}
@@ -347,43 +362,51 @@ export function FootprintView({
             tree={requestTree}
           />
 
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
-                  AI Perception Report
-                </h4>
-                <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-                  Send this full analysis back to OpenAI and generate a leadership-ready synthesis of AI&apos;s current picture of the brand.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleGenerateNarrative}
-                disabled={isNarrativePending}
-                className="cursor-pointer rounded-full bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
-              >
-                {isNarrativePending
-                  ? "Generating report..."
-                  : "Generate AI Perception Report"}
-              </button>
-            </div>
-
-            {hasNarrativeForSelected && effectiveNarrativeReport && (
-              <div className="mt-4 rounded-xl border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-950">
-                <NarrativeReportView report={effectiveNarrativeReport} />
-                {effectiveNarrativeMeta && (
-                  <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
-                    Generated with {effectiveNarrativeMeta.model} at{" "}
-                    {new Date(effectiveNarrativeMeta.generatedAt).toLocaleString()} from
-                    request {effectiveNarrativeMeta.sourceRequestId}
+          {showPerceptionReport && (
+            <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                    AI Perception Report
+                  </h4>
+                  <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                    Send this full analysis back to OpenAI and generate a
+                    leadership-ready synthesis of AI&apos;s current picture of
+                    the brand.
                   </p>
-                )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateNarrative}
+                  disabled={isNarrativePending}
+                  className="cursor-pointer rounded-full bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+                >
+                  {isNarrativePending
+                    ? "Generating report..."
+                    : "Generate AI Perception Report"}
+                </button>
               </div>
-            )}
-          </div>
 
-          <FootprintCharts parsed={parsed} groupMeta={requestGroups} />
+              {hasNarrativeForSelected && effectiveNarrativeReport && (
+                <div className="mt-4 rounded-xl border border-zinc-100 bg-zinc-50 p-4 dark:border-zinc-700 dark:bg-zinc-950">
+                  <NarrativeReportView report={effectiveNarrativeReport} />
+                  {effectiveNarrativeMeta && (
+                    <p className="mt-3 text-xs text-zinc-400 dark:text-zinc-500">
+                      Generated with {effectiveNarrativeMeta.model} at{" "}
+                      {new Date(
+                        effectiveNarrativeMeta.generatedAt,
+                      ).toLocaleString()}{" "}
+                      from request {effectiveNarrativeMeta.sourceRequestId}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {showFootprintCharts && (
+            <FootprintCharts parsed={parsed} groupMeta={requestGroups} />
+          )}
 
           <div className="border-t border-zinc-100 pt-4 dark:border-zinc-800">
             <p className="text-xs text-zinc-400 dark:text-zinc-500">
@@ -398,7 +421,9 @@ export function FootprintView({
   );
 }
 
-function inferGroupsFromParsed(parsed: FootprintFullResponse): FootprintGroup[] {
+function inferGroupsFromParsed(
+  parsed: FootprintFullResponse,
+): FootprintGroup[] {
   return parsed.groups.map((group, index) => ({
     id: `group_${index + 1}`,
     title: `Category ${index + 1}`,
@@ -610,7 +635,9 @@ function NarrativeReportView({ report }: { report: string }) {
     );
   }
 
-  const executive = sections.find((section) => /executive summary/i.test(section.title));
+  const executive = sections.find((section) =>
+    /executive summary/i.test(section.title),
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -728,7 +755,9 @@ function parseNarrativeReport(report: string): NarrativeSection[] {
       };
     }
 
-    const evidenceMatch = line.match(/\*\*Evidence-strength note:\*\*\s*(.+)$/i);
+    const evidenceMatch = line.match(
+      /\*\*Evidence-strength note:\*\*\s*(.+)$/i,
+    );
     if (evidenceMatch) {
       current.evidenceNote = evidenceMatch[1].trim();
       continue;

@@ -8,7 +8,9 @@ import OpenAI from "openai";
 import {
   buildGroupPrompt,
   buildOriginSummaryPrompt,
+  buildHierarchyNodeSummaryPrompt,
   GROUP_JSON_SCHEMA,
+  NODE_SUMMARY_JSON_SCHEMA,
   ORIGIN_SUMMARY_JSON_SCHEMA,
   FOOTPRINT_GROUPS,
 } from "@/lib/footprint-prompt";
@@ -17,7 +19,10 @@ import type {
   FootprintFullResponse,
   FootprintGroup,
   FootprintOriginSummary,
+  FootprintNodeAnswer,
 } from "@/lib/footprint-prompt";
+import { buildTreeFromGroups } from "@/lib/footprint-hierarchy";
+import type { FootprintTreeNode } from "@/lib/footprint-hierarchy";
 import { analyzeSeoAeoUrl } from "@/lib/seo-aeo-analyzer";
 
 function parseOptionalBudgetHours(value: string | null) {
@@ -583,9 +588,44 @@ function coerceOriginSummary(raw: FootprintOriginSummary): FootprintOriginSummar
   };
 }
 
+function normalizeQuestionKey(value: string) {
+  return value.toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function flattenTreePostOrder(nodes: FootprintTreeNode[]): FootprintTreeNode[] {
+  const ordered: FootprintTreeNode[] = [];
+
+  function walk(node: FootprintTreeNode) {
+    node.children.forEach(walk);
+    ordered.push(node);
+  }
+
+  nodes.forEach(walk);
+  return ordered;
+}
+
+function coerceNodeAnswerPayload(raw: {
+  answer: string;
+  confidence: number;
+  sources: FootprintNodeAnswer["sources"];
+}) {
+  return {
+    answer:
+      typeof raw.answer === "string" && raw.answer.trim()
+        ? raw.answer.trim()
+        : "No summary provided.",
+    confidence:
+      typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
+        ? Math.max(0, Math.min(1, raw.confidence))
+        : 0,
+    sources: Array.isArray(raw.sources) ? raw.sources : [],
+  };
+}
+
 export async function requestFootprint(
   projectId: string,
   customGroups?: FootprintGroup[],
+  customTree?: FootprintTreeNode[] | null,
 ) {
   const supabase = await createClient();
   const {
@@ -627,6 +667,7 @@ export async function requestFootprint(
 
   const MODEL = "gpt-5.2";
   const groupsToUse = sanitizeFootprintGroups(customGroups);
+  const treeToUse = customTree && customTree.length > 0 ? customTree : buildTreeFromGroups(groupsToUse);
 
   const { data: request, error: insertError } = await supabase
     .from("footprint_requests")
@@ -706,27 +747,139 @@ export async function requestFootprint(
       };
     });
 
+    const nodeAnswers: Record<string, FootprintNodeAnswer> = {};
+    const questionLookup = new Map<string, GroupResponse["questions"][number]>();
+
+    groupsToUse.forEach((group, groupIndex) => {
+      const response = resolvedGroups[groupIndex];
+      if (!response) return;
+
+      response.questions.forEach((questionAnswer) => {
+        const key = `${group.id}::${normalizeQuestionKey(questionAnswer.question)}`;
+        questionLookup.set(key, questionAnswer);
+      });
+    });
+
+    const orderedNodes = flattenTreePostOrder(treeToUse);
+
+    for (const node of orderedNodes) {
+      if (node.kind === "question") {
+        const questionText = node.question ?? node.title;
+        const key = `${node.groupId ?? ""}::${normalizeQuestionKey(questionText)}`;
+        const matched = questionLookup.get(key);
+
+        nodeAnswers[node.id] = {
+          nodeId: node.id,
+          title: node.title,
+          kind: node.kind,
+          answer: matched?.answer ?? "No answer provided for this node.",
+          confidence: matched?.confidence ?? 0,
+          sources: matched?.sources ?? [],
+        };
+        continue;
+      }
+
+      const childAnswers = node.children
+        .map((child) => nodeAnswers[child.id])
+        .filter((child): child is FootprintNodeAnswer => Boolean(child));
+
+      if (childAnswers.length === 0) {
+        nodeAnswers[node.id] = {
+          nodeId: node.id,
+          title: node.title,
+          kind: node.kind,
+          answer: "No child answers available for this category.",
+          confidence: 0,
+          sources: [],
+        };
+        continue;
+      }
+
+      try {
+        const summaryPrompt = buildHierarchyNodeSummaryPrompt(
+          companyName,
+          prodUrl,
+          node.title,
+          childAnswers.map((child) => ({
+            title: child.title,
+            answer: child.answer,
+            confidence: child.confidence,
+            sources: child.sources,
+          })),
+        );
+
+        const nodeSummaryResponse = await openai.responses.create({
+          model: MODEL,
+          input: summaryPrompt,
+          text: { format: NODE_SUMMARY_JSON_SCHEMA },
+        });
+
+        const rawSummary = nodeSummaryResponse.output_text || "";
+        const parsedSummary = JSON.parse(rawSummary) as {
+          answer: string;
+          confidence: number;
+          sources: FootprintNodeAnswer["sources"];
+        };
+        const coercedSummary = coerceNodeAnswerPayload(parsedSummary);
+
+        nodeAnswers[node.id] = {
+          nodeId: node.id,
+          title: node.title,
+          kind: node.kind,
+          answer: coercedSummary.answer,
+          confidence: coercedSummary.confidence,
+          sources: coercedSummary.sources,
+        };
+      } catch {
+        const avgConfidence =
+          childAnswers.reduce((sum, child) => sum + child.confidence, 0) / childAnswers.length;
+
+        nodeAnswers[node.id] = {
+          nodeId: node.id,
+          title: node.title,
+          kind: node.kind,
+          answer: childAnswers
+            .slice(0, 3)
+            .map((child) => child.answer)
+            .join(" ")
+            .trim() || "No summary provided.",
+          confidence: avgConfidence,
+          sources: childAnswers.flatMap((child) => child.sources).slice(0, 6),
+        };
+      }
+    }
+
     let originSummaryRaw: string | null = null;
     let originSummary: FootprintOriginSummary | undefined;
 
     try {
-      const originPrompt = buildOriginSummaryPrompt(
-        companyName,
-        prodUrl,
-        groupsToUse,
-        resolvedGroups,
-      );
+      const rootNodeAnswer = nodeAnswers[treeToUse[0]?.id ?? ""];
 
-      const originResponse = await openai.responses.create({
-        model: MODEL,
-        input: originPrompt,
-        text: { format: ORIGIN_SUMMARY_JSON_SCHEMA },
-      });
+      if (rootNodeAnswer && treeToUse.length === 1) {
+        originSummary = {
+          summary: rootNodeAnswer.answer,
+          confidence: rootNodeAnswer.confidence,
+          sources: rootNodeAnswer.sources,
+        };
+      } else {
+        const originPrompt = buildOriginSummaryPrompt(
+          companyName,
+          prodUrl,
+          groupsToUse,
+          resolvedGroups,
+        );
 
-      originSummaryRaw = originResponse.output_text || null;
-      if (originSummaryRaw) {
-        const parsedOrigin = JSON.parse(originSummaryRaw) as FootprintOriginSummary;
-        originSummary = coerceOriginSummary(parsedOrigin);
+        const originResponse = await openai.responses.create({
+          model: MODEL,
+          input: originPrompt,
+          text: { format: ORIGIN_SUMMARY_JSON_SCHEMA },
+        });
+
+        originSummaryRaw = originResponse.output_text || null;
+        if (originSummaryRaw) {
+          const parsedOrigin = JSON.parse(originSummaryRaw) as FootprintOriginSummary;
+          originSummary = coerceOriginSummary(parsedOrigin);
+        }
       }
     } catch {
       originSummary = undefined;
@@ -735,6 +888,8 @@ export async function requestFootprint(
     const fullResponse: FootprintFullResponse = {
       groups: resolvedGroups,
       group_meta: groupsToUse,
+      hierarchy_tree: treeToUse,
+      node_answers: nodeAnswers,
       ...(originSummary ? { origin_summary: originSummary } : {}),
     };
 

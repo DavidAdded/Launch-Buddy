@@ -22,9 +22,30 @@ export type FootprintOriginSummary = {
   sources: Source[];
 };
 
+export type FootprintHierarchySnapshotNode = {
+  id: string;
+  title: string;
+  kind: "category" | "question";
+  level: number;
+  children: FootprintHierarchySnapshotNode[];
+  question?: string;
+  groupId?: string;
+};
+
+export type FootprintNodeAnswer = {
+  nodeId: string;
+  title: string;
+  kind: "category" | "question";
+  answer: string;
+  confidence: number;
+  sources: Source[];
+};
+
 export type FootprintFullResponse = {
   groups: GroupResponse[];
   group_meta?: FootprintGroup[];
+  hierarchy_tree?: FootprintHierarchySnapshotNode[];
+  node_answers?: Record<string, FootprintNodeAnswer>;
   origin_summary?: FootprintOriginSummary;
 };
 
@@ -190,6 +211,59 @@ OUTPUT RULES
 - No fabricated URLs, no markdown, no extra keys.`;
 }
 
+
+
+export function buildHierarchyNodeSummaryPrompt(
+  companyName: string,
+  productionUrl: string,
+  nodeTitle: string,
+  childAnswers: Array<{
+    title: string;
+    answer: string;
+    confidence: number;
+    sources: Source[];
+  }>,
+): string {
+  const digest = childAnswers
+    .map((child, index) =>
+      [
+        `${index + 1}. ${child.title}`,
+        `   Answer: ${child.answer}`,
+        `   Confidence: ${Math.round(child.confidence * 100)}%`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+
+  const sourcePool = childAnswers
+    .flatMap((child) => child.sources)
+    .map((source) => `- ${source.type} | ${source.title} | ${source.url}`)
+    .slice(0, 80)
+    .join("\n");
+
+  return `You are synthesizing one hierarchical footprint summary for a parent category node.
+
+Company: ${companyName}
+Website: ${productionUrl}
+Parent node: ${nodeTitle}
+
+CHILD NODE ANALYSIS
+${digest || "- none"}
+
+SOURCE POOL (use only these URLs)
+${sourcePool || "- none"}
+
+TASK
+Produce one parent-level answer that summarizes the child findings.
+
+OUTPUT RULES
+- Return ONLY valid JSON matching the schema.
+- "answer": 2-4 sentences, specific and concrete.
+- "confidence": number between 0 and 1.
+- "sources": include 1-6 strongest sources chosen from SOURCE POOL only.
+- Do not invent URLs.
+- No markdown and no extra keys.`;
+}
+
 const sourceSchema = {
   type: "object",
   properties: {
@@ -228,6 +302,22 @@ export const GROUP_JSON_SCHEMA = {
       },
     },
     required: ["summary", "questions"],
+    additionalProperties: false,
+  },
+} as const;
+
+export const NODE_SUMMARY_JSON_SCHEMA = {
+  type: "json_schema" as const,
+  name: "footprint_node_summary",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      answer: { type: "string" },
+      confidence: { type: "number" },
+      sources: { type: "array", items: sourceSchema },
+    },
+    required: ["answer", "confidence", "sources"],
     additionalProperties: false,
   },
 } as const;
