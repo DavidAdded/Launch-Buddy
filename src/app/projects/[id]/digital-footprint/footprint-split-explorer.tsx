@@ -142,7 +142,7 @@ export function FootprintSplitExplorer({
   return (
     <div className="h-full w-full pb-1">
       <div className="grid h-full w-full gap-4 lg:grid-cols-2">
-        <aside className="flex h-full flex-col rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900 min-h-[500px]">
+        <aside className="flex h-full min-h-0 flex-col rounded-2xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h4 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">

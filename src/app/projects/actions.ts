@@ -20,6 +20,7 @@ import type {
   FootprintGroup,
   FootprintOriginSummary,
   FootprintNodeAnswer,
+  Source,
 } from "@/lib/footprint-prompt";
 import { buildTreeFromGroups } from "@/lib/footprint-hierarchy";
 import type { FootprintTreeNode } from "@/lib/footprint-hierarchy";
@@ -928,6 +929,498 @@ export async function requestFootprint(
       .update({ status: "error", error_message: message })
       .eq("id", request.id);
     return { error: message };
+  }
+}
+
+
+const FOOTPRINT_V2_HEADERS = [
+  "theme",
+  "question_id",
+  "question",
+  "model",
+  "run_id",
+  "answer",
+  "sources",
+  "confidence",
+  "notes",
+] as const;
+
+type FootprintV2TemplateRow = {
+  theme: string;
+  question_id: string;
+  question: string;
+  model: string;
+  run_id: string;
+  answer: string;
+  sources: string;
+  confidence: string;
+  notes: string;
+};
+
+function parseCsvRowsForFootprintV2(input: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+
+    if (char === '"') {
+      const next = input[index + 1];
+      if (inQuotes && next === '"') {
+        cell += '"';
+        index += 1;
+        continue;
+      }
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && input[index + 1] === "\n") {
+        index += 1;
+      }
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function parseFootprintV2Template(csvText: string): {
+  rows: FootprintV2TemplateRow[];
+  error: string | null;
+} {
+  const parsedRows = parseCsvRowsForFootprintV2(csvText);
+  if (parsedRows.length < 2) {
+    return {
+      rows: [],
+      error:
+        "CSV template is empty. Include header and at least one question row.",
+    };
+  }
+
+  const header = parsedRows[0].map((value) => value.trim().toLowerCase());
+  const expectedHeader = [...FOOTPRINT_V2_HEADERS];
+
+  const headerMatches =
+    header.length === expectedHeader.length &&
+    expectedHeader.every((column, index) => header[index] === column);
+
+  if (!headerMatches) {
+    return {
+      rows: [],
+      error: `Invalid CSV header. Expected exactly: ${expectedHeader.join(",")}`,
+    };
+  }
+
+  const rows: FootprintV2TemplateRow[] = [];
+
+  for (let rowIndex = 1; rowIndex < parsedRows.length; rowIndex += 1) {
+    const rawRow = parsedRows[rowIndex];
+    const normalizedRow = expectedHeader.map((_, index) =>
+      (rawRow[index] ?? "").trim(),
+    );
+
+    if (normalizedRow.every((cell) => cell.length === 0)) {
+      continue;
+    }
+
+    const row = {
+      theme: normalizedRow[0],
+      question_id: normalizedRow[1],
+      question: normalizedRow[2],
+      model: normalizedRow[3],
+      run_id: normalizedRow[4],
+      answer: normalizedRow[5],
+      sources: normalizedRow[6],
+      confidence: normalizedRow[7],
+      notes: normalizedRow[8],
+    };
+
+    if (!row.theme || !row.question_id || !row.question) {
+      return {
+        rows: [],
+        error:
+          `Row ${rowIndex + 1} is missing required fields. theme, question_id, and question must be set.`,
+      };
+    }
+
+    rows.push(row);
+  }
+
+  if (rows.length === 0) {
+    return {
+      rows: [],
+      error: "CSV template contains no question rows.",
+    };
+  }
+
+  return { rows, error: null };
+}
+
+function escapeCsvCell(value: string) {
+  const needsQuotes = /[",\n\r]/.test(value);
+  const escaped = value.replace(/"/g, '""');
+  return needsQuotes ? `"${escaped}"` : escaped;
+}
+
+function serializeFootprintV2Csv(rows: FootprintV2TemplateRow[]) {
+  const lines = [FOOTPRINT_V2_HEADERS.join(",")];
+  for (const row of rows) {
+    const line = [
+      row.theme,
+      row.question_id,
+      row.question,
+      row.model,
+      row.run_id,
+      row.answer,
+      row.sources,
+      row.confidence,
+      row.notes,
+    ]
+      .map((cell) => escapeCsvCell(cell ?? ""))
+      .join(",");
+    lines.push(line);
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+function normalizeThemeQuestionKey(theme: string, questionId: string) {
+  return `${theme.toLowerCase().trim()}::${questionId.toLowerCase().trim()}`;
+}
+
+const FOOTPRINT_V2_THEME_JSON_SCHEMA = {
+  type: "json_schema" as const,
+  name: "footprint_v2_theme_answers",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            question_id: { type: "string" },
+            answer: { type: "string" },
+            confidence: { type: "number" },
+            notes: { type: "string" },
+            sources: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  url: { type: "string" },
+                  title: { type: "string" },
+                  type: {
+                    type: "string",
+                    enum: [
+                      "company_site",
+                      "press",
+                      "directory",
+                      "review",
+                      "social",
+                      "other",
+                    ],
+                  },
+                },
+                required: ["url", "title", "type"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["question_id", "answer", "confidence", "sources", "notes"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["items"],
+    additionalProperties: false,
+  },
+};
+
+function buildFootprintV2ThemePrompt(params: {
+  companyName: string;
+  prodUrl: string;
+  theme: string;
+  rows: FootprintV2TemplateRow[];
+}) {
+  const numbered = params.rows
+    .map(
+      (row, index) =>
+        `${index + 1}. question_id=${row.question_id}\n   question=${row.question}`,
+    )
+    .join("\n");
+
+  return `You are filling a Digital Footprint v2 CSV template with evidence-based answers.
+
+Company: ${params.companyName}
+Website: ${params.prodUrl}
+Theme: ${params.theme}
+
+QUESTIONS
+${numbered}
+
+PROCESS
+1) Browse ${params.prodUrl} and relevant key pages.
+2) Run web searches for the company and theme.
+3) Prioritize independent, credible third-party sources.
+
+OUTPUT RULES
+- Return ONLY valid JSON that matches the schema.
+- Return one item per input question_id.
+- Keep answer concise but specific (2-4 sentences).
+- confidence must be between 0 and 1.
+- Include at least 1 source per question when possible.
+- notes should mention important caveats, assumptions, or data gaps.
+- Never invent URLs. If uncertain, lower confidence and explain in notes.`;
+}
+
+function coerceFootprintV2Item(raw: {
+  question_id: string;
+  answer: string;
+  confidence: number;
+  notes: string;
+  sources: Source[];
+}) {
+  return {
+    question_id: raw.question_id?.trim() ?? "",
+    answer:
+      typeof raw.answer === "string" && raw.answer.trim()
+        ? raw.answer.trim()
+        : "No answer provided.",
+    confidence:
+      typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
+        ? Math.max(0, Math.min(1, raw.confidence))
+        : 0,
+    notes:
+      typeof raw.notes === "string" && raw.notes.trim()
+        ? raw.notes.trim()
+        : "",
+    sources: Array.isArray(raw.sources)
+      ? raw.sources.filter((source) => Boolean(source?.url && source?.title))
+      : [],
+  };
+}
+
+export async function requestFootprintV2TemplateFill(
+  projectId: string,
+  csvTemplate: string,
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated", outputCsv: null as string | null };
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id, prod_url, customers(name)")
+    .eq("id", projectId)
+    .single();
+
+  if (!project) {
+    return { error: "Project not found", outputCsv: null as string | null };
+  }
+
+  const customer = project.customers as unknown as { name: string } | null;
+  const companyName = customer?.name?.trim();
+  const prodUrl = project.prod_url?.trim();
+
+  if (!companyName) {
+    return {
+      error: "Company is required. Set it in project settings.",
+      outputCsv: null as string | null,
+    };
+  }
+
+  if (!prodUrl) {
+    return {
+      error:
+        "Production URL is required for authority analysis. Set it in project settings.",
+      outputCsv: null as string | null,
+    };
+  }
+
+  const parsedTemplate = parseFootprintV2Template(csvTemplate);
+  if (parsedTemplate.error) {
+    return { error: parsedTemplate.error, outputCsv: null as string | null };
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey === "your-openai-api-key-here") {
+    return {
+      error: "OpenAI API key is not configured.",
+      outputCsv: null as string | null,
+    };
+  }
+
+  const MODEL = "gpt-5.2";
+  const runId = `dfv2-${Date.now()}`;
+  const groupedByTheme = new Map<string, FootprintV2TemplateRow[]>();
+
+  for (const row of parsedTemplate.rows) {
+    const existing = groupedByTheme.get(row.theme) ?? [];
+    existing.push(row);
+    groupedByTheme.set(row.theme, existing);
+  }
+
+  try {
+    const openai = new OpenAI({ apiKey });
+
+    const themeResults = await Promise.all(
+      Array.from(groupedByTheme.entries()).map(async ([theme, rows]) => {
+        try {
+          const prompt = buildFootprintV2ThemePrompt({
+            companyName,
+            prodUrl,
+            theme,
+            rows,
+          });
+
+          const response = await openai.responses.create({
+            model: MODEL,
+            tools: [{ type: "web_search" }],
+            input: prompt,
+            text: { format: FOOTPRINT_V2_THEME_JSON_SCHEMA },
+          });
+
+          const content = response.output_text;
+          if (!content) {
+            return {
+              theme,
+              items: [] as Array<{
+                question_id: string;
+                answer: string;
+                confidence: number;
+                notes: string;
+                sources: Source[];
+              }>,
+              error: "Empty response",
+            };
+          }
+
+          const parsed = JSON.parse(content) as {
+            items: Array<{
+              question_id: string;
+              answer: string;
+              confidence: number;
+              notes: string;
+              sources: Source[];
+            }>;
+          };
+
+          const coerced = Array.isArray(parsed.items)
+            ? parsed.items.map(coerceFootprintV2Item)
+            : [];
+
+          return {
+            theme,
+            items: coerced,
+            error: null as string | null,
+          };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : "Unknown error";
+          return {
+            theme,
+            items: [] as Array<{
+              question_id: string;
+              answer: string;
+              confidence: number;
+              notes: string;
+              sources: Source[];
+            }>,
+            error: message,
+          };
+        }
+      }),
+    );
+
+    const answersByKey = new Map<
+      string,
+      {
+        answer: string;
+        confidence: number;
+        notes: string;
+        sources: Source[];
+      }
+    >();
+
+    for (const result of themeResults) {
+      for (const item of result.items) {
+        if (!item.question_id) continue;
+        answersByKey.set(normalizeThemeQuestionKey(result.theme, item.question_id), {
+          answer: item.answer,
+          confidence: item.confidence,
+          notes: item.notes,
+          sources: item.sources,
+        });
+      }
+    }
+
+    const failedThemes = themeResults.filter((result) => result.error !== null);
+
+    const filledRows: FootprintV2TemplateRow[] = parsedTemplate.rows.map((row) => {
+      const key = normalizeThemeQuestionKey(row.theme, row.question_id);
+      const answer = answersByKey.get(key);
+
+      const fallbackNote = failedThemes.find((themeResult) => themeResult.theme === row.theme)
+        ? "Theme analysis failed for this row."
+        : "No model answer returned for this question_id.";
+
+      const sourcesString = (answer?.sources ?? [])
+        .slice(0, 6)
+        .map((source) => `${source.title} (${source.url})`)
+        .join(" | ");
+
+      return {
+        ...row,
+        model: MODEL,
+        run_id: runId,
+        answer: answer?.answer ?? "No answer provided.",
+        sources: sourcesString,
+        confidence: `${Math.round((answer?.confidence ?? 0) * 100) / 100}`,
+        notes: answer?.notes || fallbackNote,
+      };
+    });
+
+    return {
+      error: null,
+      outputCsv: serializeFootprintV2Csv(filledRows),
+      runId,
+      fileName: `${companyName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-digital-footprint-v2-${runId}.csv`,
+      warnings:
+        failedThemes.length > 0
+          ? failedThemes.map((result) => `${result.theme}: ${result.error}`)
+          : [],
+    };
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Unknown error calling OpenAI";
+    return { error: message, outputCsv: null as string | null };
   }
 }
 

@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useTransition, useMemo } from "react";
-import { requestFootprint, generateFootprintNarrative } from "../../actions";
+import {
+  requestFootprint,
+  generateFootprintNarrative,
+  requestFootprintV2TemplateFill,
+} from "../../actions";
 import type {
   FootprintFullResponse,
   FootprintGroup,
@@ -89,6 +93,12 @@ export function FootprintView({
   );
   const [csvWarnings, setCsvWarnings] = useState<string[]>([]);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [v2TemplateName, setV2TemplateName] = useState<string | null>(null);
+  const [v2TemplateContent, setV2TemplateContent] = useState<string | null>(null);
+  const [v2Error, setV2Error] = useState<string | null>(null);
+  const [v2Warnings, setV2Warnings] = useState<string[]>([]);
+  const [v2OutputFileName, setV2OutputFileName] = useState<string | null>(null);
+  const [isV2Pending, startV2Transition] = useTransition();
 
   const latest = requests[selectedIndex] ?? null;
   const parsed = latest?.parsed_response ?? null;
@@ -170,6 +180,60 @@ export function FootprintView({
     setCsvFileName(file.name);
   }
 
+  async function handleV2TemplateUpload(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    const raw = await file.text();
+    setV2Error(null);
+    setV2Warnings([]);
+    setV2OutputFileName(null);
+    setV2TemplateName(file.name);
+    setV2TemplateContent(raw);
+  }
+
+  function downloadCsvFile(fileName: string, content: string) {
+    const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleFillV2Template() {
+    if (!v2TemplateContent) {
+      setV2Error("Upload a Digital Footprint v2 template CSV first.");
+      return;
+    }
+
+    setV2Error(null);
+    setV2Warnings([]);
+    startV2Transition(async () => {
+      const result = await requestFootprintV2TemplateFill(
+        projectId,
+        v2TemplateContent,
+      );
+
+      if (result.error || !result.outputCsv) {
+        setV2OutputFileName(null);
+        setV2Error(result.error ?? "Failed to fill v2 template.");
+        return;
+      }
+
+      const outputName =
+        result.fileName ??
+        `${(companyName ?? "company").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-digital-footprint-v2.csv`;
+      setV2OutputFileName(outputName);
+      setV2Warnings(result.warnings ?? []);
+      downloadCsvFile(outputName, result.outputCsv);
+    });
+  }
+
   function handleGenerateNarrative() {
     if (!latest?.id) {
       setNarrativeError("No analysis selected.");
@@ -209,6 +273,12 @@ export function FootprintView({
         </p>
       )}
 
+      {v2Error && (
+        <p className="mb-6 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600 dark:bg-red-950 dark:text-red-400">
+          {v2Error}
+        </p>
+      )}
+
       <div className="mb-6">
         <div>
           <h3 className="font-semibold text-zinc-900 dark:text-zinc-50">
@@ -221,7 +291,8 @@ export function FootprintView({
           )}
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center gap-3">
+        <div className="mt-3 space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={handleRequest}
@@ -254,11 +325,57 @@ export function FootprintView({
               ? `${csvFileName} (${configuredGroups.length} categories)`
               : `No CSV uploaded · Default ${FOOTPRINT_TOTAL_QUESTIONS}-question model`}
           </span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 border-t border-zinc-200 pt-3 dark:border-zinc-800">
+            <label className="inline-flex cursor-pointer items-center rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+              Upload v2 Template CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0] ?? null;
+                  void handleV2TemplateUpload(file);
+                  event.target.value = "";
+                }}
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={handleFillV2Template}
+              disabled={isV2Pending || !v2TemplateContent || !companyName || !prodUrl}
+              className="cursor-pointer rounded-full bg-zinc-900 px-5 py-2.5 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              {isV2Pending ? "Filling v2 CSV..." : "Fill v2 CSV with AI"}
+            </button>
+
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              {v2TemplateName
+                ? `Template: ${v2TemplateName}`
+                : "No v2 template uploaded"}
+            </span>
+
+            {v2OutputFileName && (
+              <span className="text-xs text-emerald-600 dark:text-emerald-400">
+                Downloaded: {v2OutputFileName}
+              </span>
+            )}
+          </div>
         </div>
 
         {csvWarnings.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-600 dark:text-amber-400">
             {csvWarnings.map((warning, index) => (
+              <li key={`${warning}-${index}`}>{warning}</li>
+            ))}
+          </ul>
+        )}
+
+        {v2Warnings.length > 0 && (
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-600 dark:text-amber-400">
+            {v2Warnings.map((warning, index) => (
               <li key={`${warning}-${index}`}>{warning}</li>
             ))}
           </ul>
