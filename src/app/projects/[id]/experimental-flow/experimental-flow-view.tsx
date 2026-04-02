@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   requestExperimentalFlowBaseRuns,
   requestExperimentalFlowSummaryRuns,
@@ -20,6 +21,10 @@ type ExperimentalRequest = {
       model?: string;
       run_label?: string;
       source_request_ids?: string[];
+      progress?: {
+        completed_questions?: number;
+        total_questions?: number;
+      };
     };
     rows?: Array<{
       theme: string;
@@ -151,6 +156,7 @@ export function ExperimentalFlowView({
   prodUrl: string | null;
   requests: ExperimentalRequest[];
 }) {
+  const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState<string>("oatly-answer-template-v2.csv");
   const [templateCsv, setTemplateCsv] = useState<string>(DEFAULT_EXPERIMENT_TEMPLATE);
@@ -164,6 +170,19 @@ export function ExperimentalFlowView({
   const [isBasePending, startBaseTransition] = useTransition();
   const [isSummaryPending, startSummaryTransition] = useTransition();
   const [isFinalPending, startFinalTransition] = useTransition();
+
+  useEffect(() => {
+    const hasPendingRequests = requests.some((request) => request.status === "pending");
+    if (!hasPendingRequests) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      router.refresh();
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [requests, router]);
 
   const normalizedFlowId = flowName
     .trim()
@@ -417,6 +436,12 @@ export function ExperimentalFlowView({
                     <div className="font-semibold">{label}</div>
                     <div className="opacity-80">{request.model_name}</div>
                     <div className="opacity-80">{request.status}</div>
+                    {request.parsed_response?.experimental_flow?.progress && (
+                      <div className="opacity-80">
+                        {request.parsed_response.experimental_flow.progress.completed_questions ?? 0}/
+                        {request.parsed_response.experimental_flow.progress.total_questions ?? 0} questions
+                      </div>
+                    )}
                   </button>
                 );
               })}

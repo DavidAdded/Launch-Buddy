@@ -1441,6 +1441,8 @@ type ExperimentalModelAnswer = {
   sources: Array<{ title: string; url: string }>;
 };
 
+type ExperimentalRunRow = ReturnType<typeof mergeAnswersByQuestion>[number];
+
 const EXPERIMENTAL_FLOW_ID = "experimental_flow_v1";
 const EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL = 10;
 const EXPERIMENTAL_OPENAI_MODEL = "gpt-5.2";
@@ -1768,6 +1770,106 @@ async function createExperimentalRequest(params: {
   return request.id;
 }
 
+async function initializeExperimentalRequestProgress(params: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  requestId: string;
+  stage: ExperimentalFlowStage;
+  flowId: string;
+  modelName: string;
+  runLabel: string;
+  sourceRequestIds?: string[];
+  rows: ExperimentalRunRow[];
+}) {
+  await params.supabase
+    .from("footprint_requests")
+    .update({
+      status: "pending",
+      raw_response: JSON.stringify({
+        experimental_flow: {
+          flow_id: params.flowId,
+          stage: params.stage,
+          model: params.modelName,
+          run_label: params.runLabel,
+          source_request_ids: params.sourceRequestIds ?? [],
+          progress: {
+            completed_questions: 0,
+            total_questions: params.rows.length,
+          },
+        },
+        raw_model_output: null,
+      }),
+      parsed_response: {
+        experimental_flow: {
+          flow_id: params.flowId,
+          stage: params.stage,
+          model: params.modelName,
+          run_label: params.runLabel,
+          source_request_ids: params.sourceRequestIds ?? [],
+          progress: {
+            completed_questions: 0,
+            total_questions: params.rows.length,
+          },
+        },
+        rows: params.rows,
+      },
+      error_message: null,
+    })
+    .eq("id", params.requestId);
+}
+
+async function updateExperimentalRequestProgress(params: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  requestId: string;
+  stage: ExperimentalFlowStage;
+  flowId: string;
+  modelName: string;
+  runLabel: string;
+  sourceRequestIds?: string[];
+  rows: ExperimentalRunRow[];
+  completedQuestions: number;
+  totalQuestions: number;
+}) {
+  await params.supabase
+    .from("footprint_requests")
+    .update({
+      status: "pending",
+      parsed_response: {
+        experimental_flow: {
+          flow_id: params.flowId,
+          stage: params.stage,
+          model: params.modelName,
+          run_label: params.runLabel,
+          source_request_ids: params.sourceRequestIds ?? [],
+          progress: {
+            completed_questions: params.completedQuestions,
+            total_questions: params.totalQuestions,
+          },
+        },
+        rows: params.rows,
+      },
+      raw_response: JSON.stringify({
+        experimental_flow: {
+          flow_id: params.flowId,
+          stage: params.stage,
+          model: params.modelName,
+          run_label: params.runLabel,
+          source_request_ids: params.sourceRequestIds ?? [],
+          progress: {
+            completed_questions: params.completedQuestions,
+            total_questions: params.totalQuestions,
+          },
+        },
+        raw_model_output: {
+          mode: "per-question",
+          completed_questions: params.completedQuestions,
+          total_questions: params.totalQuestions,
+        },
+      }),
+      error_message: null,
+    })
+    .eq("id", params.requestId);
+}
+
 async function completeExperimentalRequest(params: {
   supabase: Awaited<ReturnType<typeof createClient>>;
   requestId: string;
@@ -1880,6 +1982,7 @@ async function runExperimentalPerQuestion(params: {
   buildPrompt: (question: ExperimentalTemplateQuestion) => string;
   openAiApiKey: string;
   anthropicApiKey?: string;
+  onProgress?: (completedItems: ExperimentalModelAnswer[], completed: number, total: number) => Promise<void> | void;
 }) {
   const items: ExperimentalModelAnswer[] = [];
 
@@ -1906,6 +2009,10 @@ async function runExperimentalPerQuestion(params: {
             sources: [],
           },
     );
+
+    if (params.onProgress) {
+      await params.onProgress(items, items.length, params.questions.length);
+    }
   }
 
   return { raw: null as string | null, items };
@@ -2011,6 +2118,17 @@ export async function requestExperimentalFlowBaseRuns(
     });
 
     try {
+      const initialRows = mergeAnswersByQuestion(parsed.questions, []);
+      await initializeExperimentalRequestProgress({
+        supabase: access.supabase,
+        requestId,
+        stage: "base",
+        flowId: targetFlowId,
+        modelName,
+        runLabel,
+        rows: initialRows,
+      });
+
       const result = await runExperimentalPerQuestion({
         modelName,
         questions: parsed.questions,
@@ -2023,6 +2141,20 @@ export async function requestExperimentalFlowBaseRuns(
           }),
         openAiApiKey,
         anthropicApiKey,
+        onProgress: async (completedItems, completed, total) => {
+          const progressRows = mergeAnswersByQuestion(parsed.questions, completedItems);
+          await updateExperimentalRequestProgress({
+            supabase: access.supabase,
+            requestId,
+            stage: "base",
+            flowId: targetFlowId,
+            modelName,
+            runLabel,
+            rows: progressRows,
+            completedQuestions: completed,
+            totalQuestions: total,
+          });
+        },
       });
 
       const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
@@ -2175,6 +2307,18 @@ export async function requestExperimentalFlowSummaryRuns(
     });
 
     try {
+      const initialRows = mergeAnswersByQuestion(parsed.questions, []);
+      await initializeExperimentalRequestProgress({
+        supabase: access.supabase,
+        requestId,
+        stage: "summary",
+        flowId: targetFlowId,
+        modelName,
+        runLabel: `summary_${modelName}`,
+        sourceRequestIds: modelRuns.map((run) => run.requestId),
+        rows: initialRows,
+      });
+
       const result = await runExperimentalPerQuestion({
         modelName,
         questions: parsed.questions,
@@ -2198,6 +2342,21 @@ export async function requestExperimentalFlowSummaryRuns(
           }),
         openAiApiKey,
         anthropicApiKey,
+        onProgress: async (completedItems, completed, total) => {
+          const progressRows = mergeAnswersByQuestion(parsed.questions, completedItems);
+          await updateExperimentalRequestProgress({
+            supabase: access.supabase,
+            requestId,
+            stage: "summary",
+            flowId: targetFlowId,
+            modelName,
+            runLabel: `summary_${modelName}`,
+            sourceRequestIds: modelRuns.map((run) => run.requestId),
+            rows: progressRows,
+            completedQuestions: completed,
+            totalQuestions: total,
+          });
+        },
       });
 
       const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
@@ -2357,6 +2516,18 @@ export async function requestExperimentalFlowFinalRuns(
     });
 
     try {
+      const initialRows = mergeAnswersByQuestion(parsed.questions, []);
+      await initializeExperimentalRequestProgress({
+        supabase: access.supabase,
+        requestId,
+        stage: "final",
+        flowId: targetFlowId,
+        modelName,
+        runLabel: `final_${modelName}`,
+        sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
+        rows: initialRows,
+      });
+
       const result = await runExperimentalPerQuestion({
         modelName,
         questions: parsed.questions,
@@ -2373,6 +2544,21 @@ export async function requestExperimentalFlowFinalRuns(
           }),
         openAiApiKey,
         anthropicApiKey,
+        onProgress: async (completedItems, completed, total) => {
+          const progressRows = mergeAnswersByQuestion(parsed.questions, completedItems);
+          await updateExperimentalRequestProgress({
+            supabase: access.supabase,
+            requestId,
+            stage: "final",
+            flowId: targetFlowId,
+            modelName,
+            runLabel: `final_${modelName}`,
+            sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
+            rows: progressRows,
+            completedQuestions: completed,
+            totalQuestions: total,
+          });
+        },
       });
 
       const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
