@@ -215,6 +215,30 @@ export function ExperimentalFlowView({
     return map;
   }, [experimentalRuns]);
 
+  const pendingBase = useMemo(
+    () =>
+      grouped.base.filter(
+        (r) => r.status === "pending" && (r.parsed_response?.experimental_flow?.progress?.completed_questions ?? 0) < (r.parsed_response?.experimental_flow?.progress?.total_questions ?? 0),
+      ),
+    [grouped.base],
+  );
+
+  const pendingSummary = useMemo(
+    () =>
+      grouped.summary.filter(
+        (r) => r.status === "pending" && (r.parsed_response?.experimental_flow?.progress?.completed_questions ?? 0) < (r.parsed_response?.experimental_flow?.progress?.total_questions ?? 0),
+      ),
+    [grouped.summary],
+  );
+
+  const pendingFinal = useMemo(
+    () =>
+      grouped.final.filter(
+        (r) => r.status === "pending" && (r.parsed_response?.experimental_flow?.progress?.completed_questions ?? 0) < (r.parsed_response?.experimental_flow?.progress?.total_questions ?? 0),
+      ),
+    [grouped.final],
+  );
+
   const selectedList = grouped[selectedStage];
   const selectedRequest =
     selectedList.find((request) => request.id === selectedRequestId) ??
@@ -243,9 +267,12 @@ export function ExperimentalFlowView({
         setLastRunInfo(null);
         return;
       }
-      setLastRunInfo(
-        `Stage 1 completed: ${result.created ?? 0} created, ${result.failed ?? 0} failed, ${result.skipped ?? 0} skipped.`,
-      );
+      const parts: string[] = [];
+      if (result.created) parts.push(`${result.created} created`);
+      if (result.resumed) parts.push(`${result.resumed} resumed`);
+      if (result.failed) parts.push(`${result.failed} failed`);
+      if (result.skipped) parts.push(`${result.skipped} skipped`);
+      setLastRunInfo(`Stage 1: ${parts.join(", ") || "no changes"}.`);
     });
   }
 
@@ -263,7 +290,10 @@ export function ExperimentalFlowView({
         setLastRunInfo(null);
         return;
       }
-      setLastRunInfo(`Stage 2 completed: ${result.created ?? 0} summary runs created for flow ${normalizedFlowId}.`);
+      const parts: string[] = [];
+      if (result.created) parts.push(`${result.created} created`);
+      if (result.resumed) parts.push(`${result.resumed} resumed`);
+      setLastRunInfo(`Stage 2: ${parts.join(", ") || "no changes"}.`);
     });
   }
 
@@ -281,7 +311,10 @@ export function ExperimentalFlowView({
         setLastRunInfo(null);
         return;
       }
-      setLastRunInfo(`Stage 3 completed: ${result.created ?? 0} final runs created for flow ${normalizedFlowId}.`);
+      const parts: string[] = [];
+      if (result.created) parts.push(`${result.created} created`);
+      if (result.resumed) parts.push(`${result.resumed} resumed`);
+      setLastRunInfo(`Stage 3: ${parts.join(", ") || "no changes"}.`);
     });
   }
 
@@ -358,7 +391,11 @@ export function ExperimentalFlowView({
             disabled={isBasePending || !companyName || !prodUrl}
             className="cursor-pointer rounded-full bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-700 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
-            {isBasePending ? "Running stage 1..." : "Stage 1: 10 runs/model"}
+            {isBasePending
+                ? "Running stage 1..."
+                : pendingBase.length > 0
+                  ? `Stage 1: Resume (${pendingBase.map((r) => `${r.parsed_response?.experimental_flow?.progress?.completed_questions ?? 0}/${r.parsed_response?.experimental_flow?.progress?.total_questions ?? 0}`).join(", ")})`
+                  : "Stage 1: Run base"}
           </button>
 
           <button
@@ -367,7 +404,11 @@ export function ExperimentalFlowView({
             disabled={isSummaryPending || !companyName || !prodUrl}
             className="cursor-pointer rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
-            {isSummaryPending ? "Running stage 2..." : "Stage 2: summary runs"}
+            {isSummaryPending
+                ? "Running stage 2..."
+                : pendingSummary.length > 0
+                  ? `Stage 2: Resume summary`
+                  : "Stage 2: Summary"}
           </button>
 
           <button
@@ -376,7 +417,11 @@ export function ExperimentalFlowView({
             disabled={isFinalPending || !companyName || !prodUrl}
             className="cursor-pointer rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
-            {isFinalPending ? "Running stage 3..." : "Stage 3: final consensus"}
+            {isFinalPending
+                ? "Running stage 3..."
+                : pendingFinal.length > 0
+                  ? `Stage 3: Resume final`
+                  : "Stage 3: Final consensus"}
           </button>
         </div>
       </section>

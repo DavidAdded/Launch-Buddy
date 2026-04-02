@@ -1447,6 +1447,7 @@ const EXPERIMENTAL_FLOW_ID = "experimental_flow_v1";
 const EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL = 10;
 const EXPERIMENTAL_OPENAI_MODEL = "gpt-5.2";
 const EXPERIMENTAL_CLAUDE_MODEL = "claude-sonnet-4.5";
+const EXPERIMENTAL_QUESTIONS_PER_CHUNK = 5;
 
 const EXPERIMENTAL_JSON_SCHEMA = {
   type: "json_schema" as const,
@@ -1982,11 +1983,19 @@ async function runExperimentalPerQuestion(params: {
   buildPrompt: (question: ExperimentalTemplateQuestion) => string;
   openAiApiKey: string;
   anthropicApiKey?: string;
+  startIndex?: number;
+  chunkSize?: number;
+  previousItems?: ExperimentalModelAnswer[];
   onProgress?: (completedItems: ExperimentalModelAnswer[], completed: number, total: number) => Promise<void> | void;
 }) {
-  const items: ExperimentalModelAnswer[] = [];
+  const startIndex = params.startIndex ?? 0;
+  const chunkSize = params.chunkSize ?? EXPERIMENTAL_QUESTIONS_PER_CHUNK;
+  const endIndex = Math.min(startIndex + chunkSize, params.questions.length);
+  const chunk = params.questions.slice(startIndex, endIndex);
 
-  for (const question of params.questions) {
+  const items: ExperimentalModelAnswer[] = [...(params.previousItems ?? [])];
+
+  for (const question of chunk) {
     const result = await runExperimentalModelCall({
       modelName: params.modelName,
       prompt: params.buildPrompt(question),
@@ -2015,7 +2024,9 @@ async function runExperimentalPerQuestion(params: {
     }
   }
 
-  return { raw: null as string | null, items };
+  const isComplete = endIndex >= params.questions.length;
+
+  return { raw: null as string | null, items, isComplete, nextStartIndex: endIndex };
 }
 
 async function runExperimentalModelCall(params: {
@@ -2051,24 +2062,24 @@ export async function requestExperimentalFlowBaseRuns(
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
-    return { error: access.error ?? "Access error", created: 0, failed: 0, skipped: 0 };
+    return { error: access.error ?? "Access error", created: 0, resumed: 0, failed: 0, skipped: 0 };
   }
 
   const targetFlowId = normalizeExperimentalFlowId(flowId);
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
-    return { error: "OpenAI API key is not configured.", created: 0, failed: 0, skipped: 0 };
+    return { error: "OpenAI API key is not configured.", created: 0, resumed: 0, failed: 0, skipped: 0 };
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (includeClaude && !anthropicApiKey) {
-    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, failed: 0, skipped: 0 };
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, resumed: 0, failed: 0, skipped: 0 };
   }
 
   const parsed = parseExperimentalTemplateQuestions(csvTemplate);
   if (parsed.error) {
-    return { error: parsed.error, created: 0, failed: 0, skipped: 0 };
+    return { error: parsed.error, created: 0, resumed: 0, failed: 0, skipped: 0 };
   }
 
   const models = includeClaude
@@ -2081,34 +2092,121 @@ export async function requestExperimentalFlowBaseRuns(
     .eq("project_id", projectId)
     .order("created_at", { ascending: false });
 
-  const runCounts = new Map<string, number>();
-  for (const row of existingRuns ?? []) {
-    const parsedResponse = row.parsed_response as {
-      experimental_flow?: { flow_id?: string; stage?: string };
-    } | null;
-
-    if (
-      parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
-      parsedResponse.experimental_flow.stage === "base"
-    ) {
-      runCounts.set(row.model_name, (runCounts.get(row.model_name) ?? 0) + 1);
-    }
-  }
-
   let created = 0;
+  let resumed = 0;
   let failed = 0;
   let skipped = 0;
 
   for (const modelName of models) {
-    const currentCount = runCounts.get(modelName) ?? 0;
-    const nextRunIndex = currentCount + 1;
+    // Check for an incomplete (pending) run for this model in this flow
+    const incompleteRun = (existingRuns ?? []).find((run) => {
+      if (run.model_name !== modelName || run.status !== "pending") return false;
+      const pr = run.parsed_response as {
+        experimental_flow?: { flow_id?: string; stage?: string; progress?: { completed_questions?: number; total_questions?: number } };
+        rows?: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
+      } | null;
+      return (
+        pr?.experimental_flow?.flow_id === targetFlowId &&
+        pr.experimental_flow.stage === "base"
+      );
+    });
 
-    if (nextRunIndex > EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL) {
+    if (incompleteRun) {
+      // Resume the incomplete run
+      const pr = incompleteRun.parsed_response as {
+        experimental_flow: { flow_id: string; stage: string; run_label: string; progress: { completed_questions: number; total_questions: number } };
+        rows: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
+      };
+      const completedCount = pr.experimental_flow.progress?.completed_questions ?? 0;
+      const runLabel = pr.experimental_flow.run_label;
+
+      // Recover previously completed items from stored rows
+      const previousItems: ExperimentalModelAnswer[] = (pr.rows ?? [])
+        .filter((row) => row.answer !== "No answer provided.")
+        .map((row) => ({
+          question_id: row.question_id,
+          answer: row.answer,
+          confidence: row.confidence,
+          notes: row.notes,
+          sources: row.sources,
+        }));
+
+      try {
+        const result = await runExperimentalPerQuestion({
+          modelName,
+          questions: parsed.questions,
+          buildPrompt: (question) =>
+            buildExperimentalBasePrompt({
+              companyName: access.project.companyName,
+              prodUrl: access.project.prodUrl,
+              modelLabel: modelName,
+              question,
+            }),
+          openAiApiKey,
+          anthropicApiKey,
+          startIndex: completedCount,
+          previousItems,
+          onProgress: async (completedItems, completed, total) => {
+            const progressRows = mergeAnswersByQuestion(parsed.questions, completedItems);
+            await updateExperimentalRequestProgress({
+              supabase: access.supabase,
+              requestId: incompleteRun.id,
+              stage: "base",
+              flowId: targetFlowId,
+              modelName,
+              runLabel,
+              rows: progressRows,
+              completedQuestions: completed,
+              totalQuestions: total,
+            });
+          },
+        });
+
+        if (result.isComplete) {
+          const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+          await completeExperimentalRequest({
+            supabase: access.supabase,
+            requestId: incompleteRun.id,
+            stage: "base",
+            flowId: targetFlowId,
+            modelName,
+            runLabel,
+            raw: JSON.stringify({ mode: "per-question", stage: "base", items: result.items }),
+            rows: mergedRows,
+          });
+        }
+        resumed += 1;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown model error";
+        await failExperimentalRequest({
+          supabase: access.supabase,
+          requestId: incompleteRun.id,
+          message,
+        });
+        failed += 1;
+      }
+
+      continue;
+    }
+
+    // No incomplete run — check if we can create a new one
+    const completedBaseCount = (existingRuns ?? []).filter((run) => {
+      const pr = run.parsed_response as {
+        experimental_flow?: { flow_id?: string; stage?: string };
+      } | null;
+      return (
+        run.model_name === modelName &&
+        pr?.experimental_flow?.flow_id === targetFlowId &&
+        pr.experimental_flow.stage === "base"
+      );
+    }).length;
+
+    if (completedBaseCount >= EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL) {
       skipped += 1;
       continue;
     }
 
-    const runLabel = `base_run_${nextRunIndex}`;
+    const runLabel = `base_run_${completedBaseCount + 1}`;
     const requestId = await createExperimentalRequest({
       supabase: access.supabase,
       projectId,
@@ -2157,18 +2255,19 @@ export async function requestExperimentalFlowBaseRuns(
         },
       });
 
-      const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
-
-      await completeExperimentalRequest({
-        supabase: access.supabase,
-        requestId,
-        stage: "base",
-        flowId: targetFlowId,
-        modelName,
-        runLabel,
-        raw: JSON.stringify({ mode: "per-question", stage: "base", items: result.items }),
-        rows: mergedRows,
-      });
+      if (result.isComplete) {
+        const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+        await completeExperimentalRequest({
+          supabase: access.supabase,
+          requestId,
+          stage: "base",
+          flowId: targetFlowId,
+          modelName,
+          runLabel,
+          raw: JSON.stringify({ mode: "per-question", stage: "base", items: result.items }),
+          rows: mergedRows,
+        });
+      }
       created += 1;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown model error";
@@ -2182,8 +2281,9 @@ export async function requestExperimentalFlowBaseRuns(
   }
 
   revalidatePath(`/projects/${projectId}/experimental-flow`);
-  return { error: null, created, failed, skipped, flowId: targetFlowId };
+  return { error: null, created, resumed, failed, skipped, flowId: targetFlowId };
 }
+
 
 export async function requestExperimentalFlowSummaryRuns(
   projectId: string,
@@ -2193,49 +2293,43 @@ export async function requestExperimentalFlowSummaryRuns(
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
-    return { error: access.error ?? "Access error", created: 0 };
+    return { error: access.error ?? "Access error", created: 0, resumed: 0 };
   }
 
   const targetFlowId = normalizeExperimentalFlowId(flowId);
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
-    return { error: "OpenAI API key is not configured.", created: 0 };
+    return { error: "OpenAI API key is not configured.", created: 0, resumed: 0 };
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (includeClaude && !anthropicApiKey) {
-    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0 };
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, resumed: 0 };
   }
 
   const parsed = parseExperimentalTemplateQuestions(csvTemplate);
   if (parsed.error) {
-    return { error: parsed.error, created: 0 };
+    return { error: parsed.error, created: 0, resumed: 0 };
   }
 
-  const { data: existingRuns } = await access.supabase
+  const { data: allRuns } = await access.supabase
     .from("footprint_requests")
     .select("id, model_name, parsed_response, status")
     .eq("project_id", projectId)
-    .eq("status", "completed")
     .order("created_at", { ascending: false });
 
-  const baseRuns = (existingRuns ?? []).filter((run) => {
-    const parsedResponse = run.parsed_response as {
-      experimental_flow?: { flow_id?: string; stage?: string; model?: string };
-      rows?: Array<{
-        question_id: string;
-        answer: string;
-        confidence: number;
-        notes: string;
-        sources: Array<{ title: string; url: string }>;
-      }>;
-    } | null;
+  const completedRuns = (allRuns ?? []).filter((r) => r.status === "completed");
 
+  const baseRuns = completedRuns.filter((run) => {
+    const pr = run.parsed_response as {
+      experimental_flow?: { flow_id?: string; stage?: string };
+      rows?: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
+    } | null;
     return (
-      parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
-      parsedResponse.experimental_flow.stage === "base" &&
-      Array.isArray(parsedResponse.rows)
+      pr?.experimental_flow?.flow_id === targetFlowId &&
+      pr.experimental_flow.stage === "base" &&
+      Array.isArray(pr.rows)
     );
   });
 
@@ -2243,58 +2337,129 @@ export async function requestExperimentalFlowSummaryRuns(
     ? ([EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const)
     : ([EXPERIMENTAL_OPENAI_MODEL] as const);
   let created = 0;
+  let resumed = 0;
 
   for (const modelName of models) {
-    const hasExistingSummary = (existingRuns ?? []).some((run) => {
-      if (run.model_name !== modelName) return false;
-      const parsedResponse = run.parsed_response as {
-        experimental_flow?: { flow_id?: string; stage?: string };
+    // Check for an incomplete (pending) summary run
+    const incompleteRun = (allRuns ?? []).find((run) => {
+      if (run.model_name !== modelName || run.status !== "pending") return false;
+      const pr = run.parsed_response as {
+        experimental_flow?: { flow_id?: string; stage?: string; progress?: { completed_questions?: number; total_questions?: number } };
       } | null;
       return (
-        parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
-        parsedResponse.experimental_flow.stage === "summary"
+        pr?.experimental_flow?.flow_id === targetFlowId &&
+        pr.experimental_flow.stage === "summary"
       );
     });
-
-    if (hasExistingSummary) {
-      continue;
-    }
 
     const modelRuns = baseRuns
       .filter((run) => run.model_name === modelName)
       .slice(0, EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL)
       .map((run, index) => {
         const parsedResponse = run.parsed_response as {
-          rows: Array<{
-            question_id: string;
-            answer: string;
-            confidence: number;
-            notes: string;
-            sources: Array<{ title: string; url: string }>;
-          }>;
+          rows: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
         };
-
         const byQuestionId = new Map(
           parsedResponse.rows.map((row) => [
             row.question_id.toLowerCase(),
-            {
-              question_id: row.question_id,
-              answer: row.answer,
-              confidence: row.confidence,
-              notes: row.notes,
-              sources: row.sources,
-            },
+            { question_id: row.question_id, answer: row.answer, confidence: row.confidence, notes: row.notes, sources: row.sources },
           ]),
         );
-
-        return {
-          requestId: run.id,
-          runLabel: `input_run_${index + 1}`,
-          byQuestionId,
-        };
+        return { requestId: run.id, runLabel: `input_run_${index + 1}`, byQuestionId };
       });
 
     if (modelRuns.length === 0) {
+      continue;
+    }
+
+    const buildSummaryPrompt = (question: ExperimentalTemplateQuestion) =>
+      buildExperimentalSummaryPrompt({
+        companyName: access.project.companyName,
+        prodUrl: access.project.prodUrl,
+        modelLabel: modelName,
+        question,
+        runs: modelRuns
+          .map((run) => ({
+            runLabel: run.runLabel,
+            ...(run.byQuestionId.get(question.question_id.toLowerCase()) ?? {
+              answer: "No answer provided.",
+              confidence: 0,
+              notes: "No base run answer for this question.",
+              sources: [],
+            }),
+          }))
+          .slice(0, EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL),
+      });
+
+    if (incompleteRun) {
+      const pr = incompleteRun.parsed_response as {
+        experimental_flow: { flow_id: string; stage: string; run_label: string; source_request_ids: string[]; progress: { completed_questions: number; total_questions: number } };
+        rows: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
+      };
+      const completedCount = pr.experimental_flow.progress?.completed_questions ?? 0;
+      const runLabel = pr.experimental_flow.run_label;
+      const sourceRequestIds = pr.experimental_flow.source_request_ids ?? modelRuns.map((run) => run.requestId);
+
+      const previousItems: ExperimentalModelAnswer[] = (pr.rows ?? [])
+        .filter((row) => row.answer !== "No answer provided.")
+        .map((row) => ({ question_id: row.question_id, answer: row.answer, confidence: row.confidence, notes: row.notes, sources: row.sources }));
+
+      try {
+        const result = await runExperimentalPerQuestion({
+          modelName,
+          questions: parsed.questions,
+          buildPrompt: buildSummaryPrompt,
+          openAiApiKey,
+          anthropicApiKey,
+          startIndex: completedCount,
+          previousItems,
+          onProgress: async (completedItems, completed, total) => {
+            const progressRows = mergeAnswersByQuestion(parsed.questions, completedItems);
+            await updateExperimentalRequestProgress({
+              supabase: access.supabase,
+              requestId: incompleteRun.id,
+              stage: "summary",
+              flowId: targetFlowId,
+              modelName,
+              runLabel,
+              sourceRequestIds,
+              rows: progressRows,
+              completedQuestions: completed,
+              totalQuestions: total,
+            });
+          },
+        });
+
+        if (result.isComplete) {
+          const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+          await completeExperimentalRequest({
+            supabase: access.supabase,
+            requestId: incompleteRun.id,
+            stage: "summary",
+            flowId: targetFlowId,
+            modelName,
+            runLabel,
+            sourceRequestIds,
+            raw: JSON.stringify({ mode: "per-question", stage: "summary", items: result.items }),
+            rows: mergedRows,
+          });
+        }
+        resumed += 1;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown model error";
+        await failExperimentalRequest({ supabase: access.supabase, requestId: incompleteRun.id, message });
+      }
+      continue;
+    }
+
+    // Check if completed summary already exists
+    const hasExistingSummary = completedRuns.some((run) => {
+      if (run.model_name !== modelName) return false;
+      const pr = run.parsed_response as { experimental_flow?: { flow_id?: string; stage?: string } } | null;
+      return pr?.experimental_flow?.flow_id === targetFlowId && pr.experimental_flow.stage === "summary";
+    });
+
+    if (hasExistingSummary) {
       continue;
     }
 
@@ -2308,6 +2473,7 @@ export async function requestExperimentalFlowSummaryRuns(
 
     try {
       const initialRows = mergeAnswersByQuestion(parsed.questions, []);
+      const sourceRequestIds = modelRuns.map((run) => run.requestId);
       await initializeExperimentalRequestProgress({
         supabase: access.supabase,
         requestId,
@@ -2315,31 +2481,14 @@ export async function requestExperimentalFlowSummaryRuns(
         flowId: targetFlowId,
         modelName,
         runLabel: `summary_${modelName}`,
-        sourceRequestIds: modelRuns.map((run) => run.requestId),
+        sourceRequestIds,
         rows: initialRows,
       });
 
       const result = await runExperimentalPerQuestion({
         modelName,
         questions: parsed.questions,
-        buildPrompt: (question) =>
-          buildExperimentalSummaryPrompt({
-            companyName: access.project.companyName,
-            prodUrl: access.project.prodUrl,
-            modelLabel: modelName,
-            question,
-            runs: modelRuns
-              .map((run) => ({
-                runLabel: run.runLabel,
-                ...(run.byQuestionId.get(question.question_id.toLowerCase()) ?? {
-                  answer: "No answer provided.",
-                  confidence: 0,
-                  notes: "No base run answer for this question.",
-                  sources: [],
-                }),
-              }))
-              .slice(0, EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL),
-          }),
+        buildPrompt: buildSummaryPrompt,
         openAiApiKey,
         anthropicApiKey,
         onProgress: async (completedItems, completed, total) => {
@@ -2351,7 +2500,7 @@ export async function requestExperimentalFlowSummaryRuns(
             flowId: targetFlowId,
             modelName,
             runLabel: `summary_${modelName}`,
-            sourceRequestIds: modelRuns.map((run) => run.requestId),
+            sourceRequestIds,
             rows: progressRows,
             completedQuestions: completed,
             totalQuestions: total,
@@ -2359,32 +2508,31 @@ export async function requestExperimentalFlowSummaryRuns(
         },
       });
 
-      const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
-      await completeExperimentalRequest({
-        supabase: access.supabase,
-        requestId,
-        stage: "summary",
-        flowId: targetFlowId,
-        modelName,
-        runLabel: `summary_${modelName}`,
-        sourceRequestIds: modelRuns.map((run) => run.requestId),
-        raw: JSON.stringify({ mode: "per-question", stage: "summary", items: result.items }),
-        rows: mergedRows,
-      });
+      if (result.isComplete) {
+        const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+        await completeExperimentalRequest({
+          supabase: access.supabase,
+          requestId,
+          stage: "summary",
+          flowId: targetFlowId,
+          modelName,
+          runLabel: `summary_${modelName}`,
+          sourceRequestIds,
+          raw: JSON.stringify({ mode: "per-question", stage: "summary", items: result.items }),
+          rows: mergedRows,
+        });
+      }
       created += 1;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown model error";
-      await failExperimentalRequest({
-        supabase: access.supabase,
-        requestId,
-        message,
-      });
+      await failExperimentalRequest({ supabase: access.supabase, requestId, message });
     }
   }
 
   revalidatePath(`/projects/${projectId}/experimental-flow`);
-  return { error: null, created, flowId: targetFlowId };
+  return { error: null, created, resumed, flowId: targetFlowId };
 }
+
 
 export async function requestExperimentalFlowFinalRuns(
   projectId: string,
@@ -2394,49 +2542,43 @@ export async function requestExperimentalFlowFinalRuns(
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
-    return { error: access.error ?? "Access error", created: 0 };
+    return { error: access.error ?? "Access error", created: 0, resumed: 0 };
   }
 
   const targetFlowId = normalizeExperimentalFlowId(flowId);
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
-    return { error: "OpenAI API key is not configured.", created: 0 };
+    return { error: "OpenAI API key is not configured.", created: 0, resumed: 0 };
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (includeClaude && !anthropicApiKey) {
-    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0 };
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, resumed: 0 };
   }
 
   const parsed = parseExperimentalTemplateQuestions(csvTemplate);
   if (parsed.error) {
-    return { error: parsed.error, created: 0 };
+    return { error: parsed.error, created: 0, resumed: 0 };
   }
 
-  const { data: existingRuns } = await access.supabase
+  const { data: allRuns } = await access.supabase
     .from("footprint_requests")
     .select("id, model_name, parsed_response, status, created_at")
     .eq("project_id", projectId)
-    .eq("status", "completed")
     .order("created_at", { ascending: false });
 
-  const summaries = (existingRuns ?? []).filter((run) => {
-    const parsedResponse = run.parsed_response as {
-      experimental_flow?: { flow_id?: string; stage?: string; model?: string };
-      rows?: Array<{
-        question_id: string;
-        answer: string;
-        confidence: number;
-        notes: string;
-        sources: Array<{ title: string; url: string }>;
-      }>;
-    } | null;
+  const completedRuns = (allRuns ?? []).filter((r) => r.status === "completed");
 
+  const summaries = completedRuns.filter((run) => {
+    const pr = run.parsed_response as {
+      experimental_flow?: { flow_id?: string; stage?: string };
+      rows?: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
+    } | null;
     return (
-      parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
-      parsedResponse.experimental_flow.stage === "summary" &&
-      Array.isArray(parsedResponse.rows)
+      pr?.experimental_flow?.flow_id === targetFlowId &&
+      pr.experimental_flow.stage === "summary" &&
+      Array.isArray(pr.rows)
     );
   });
 
@@ -2444,29 +2586,17 @@ export async function requestExperimentalFlowFinalRuns(
   const latestClaude = summaries.find((run) => run.model_name === EXPERIMENTAL_CLAUDE_MODEL);
 
   if (!latestOpenAi) {
-    return {
-      error: "Missing GPT summary run. Run summary stage first.",
-      created: 0,
-    };
+    return { error: "Missing GPT summary run. Run summary stage first.", created: 0, resumed: 0 };
   }
 
   if (includeClaude && !latestClaude) {
-    return {
-      error: "Missing Claude summary run. Run summary stage first with Claude enabled.",
-      created: 0,
-    };
+    return { error: "Missing Claude summary run. Run summary stage first with Claude enabled.", created: 0, resumed: 0 };
   }
 
   const openAiSummaryByQuestionId = new Map(
     (((latestOpenAi.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []) as ReturnType<typeof mergeAnswersByQuestion>).map((row) => [
       row.question_id.toLowerCase(),
-      {
-        question_id: row.question_id,
-        answer: row.answer,
-        confidence: row.confidence,
-        notes: row.notes,
-        sources: row.sources,
-      },
+      { question_id: row.question_id, answer: row.answer, confidence: row.confidence, notes: row.notes, sources: row.sources },
     ]),
   );
 
@@ -2476,31 +2606,106 @@ export async function requestExperimentalFlowFinalRuns(
       : []
     ).map((row) => [
       row.question_id.toLowerCase(),
-      {
-        question_id: row.question_id,
-        answer: row.answer,
-        confidence: row.confidence,
-        notes: row.notes,
-        sources: row.sources,
-      },
+      { question_id: row.question_id, answer: row.answer, confidence: row.confidence, notes: row.notes, sources: row.sources },
     ]),
   );
+
 
   const models = includeClaude
     ? ([EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const)
     : ([EXPERIMENTAL_OPENAI_MODEL] as const);
   let created = 0;
+  let resumed = 0;
+  const sourceRequestIds = latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id];
 
   for (const modelName of models) {
-    const hasExistingFinal = (existingRuns ?? []).some((run) => {
-      if (run.model_name !== modelName) return false;
-      const parsedResponse = run.parsed_response as {
+    const buildFinalPromptForModel = (question: ExperimentalTemplateQuestion) =>
+      buildExperimentalFinalPrompt({
+        companyName: access.project.companyName,
+        prodUrl: access.project.prodUrl,
+        modelLabel: modelName,
+        question,
+        openAiSummary: openAiSummaryByQuestionId.get(question.question_id.toLowerCase()) ?? null,
+        claudeSummary: claudeSummaryByQuestionId.get(question.question_id.toLowerCase()) ?? null,
+      });
+
+    // Check for an incomplete (pending) final run
+    const incompleteRun = (allRuns ?? []).find((run) => {
+      if (run.model_name !== modelName || run.status !== "pending") return false;
+      const pr = run.parsed_response as {
         experimental_flow?: { flow_id?: string; stage?: string };
       } | null;
       return (
-        parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
-        parsedResponse.experimental_flow.stage === "final"
+        pr?.experimental_flow?.flow_id === targetFlowId &&
+        pr.experimental_flow.stage === "final"
       );
+    });
+
+    if (incompleteRun) {
+      const pr = incompleteRun.parsed_response as {
+        experimental_flow: { flow_id: string; stage: string; run_label: string; source_request_ids: string[]; progress: { completed_questions: number; total_questions: number } };
+        rows: Array<{ question_id: string; answer: string; confidence: number; notes: string; sources: Array<{ title: string; url: string }> }>;
+      };
+      const completedCount = pr.experimental_flow.progress?.completed_questions ?? 0;
+      const runLabel = pr.experimental_flow.run_label;
+
+      const previousItems: ExperimentalModelAnswer[] = (pr.rows ?? [])
+        .filter((row) => row.answer !== "No answer provided.")
+        .map((row) => ({ question_id: row.question_id, answer: row.answer, confidence: row.confidence, notes: row.notes, sources: row.sources }));
+
+      try {
+        const result = await runExperimentalPerQuestion({
+          modelName,
+          questions: parsed.questions,
+          buildPrompt: buildFinalPromptForModel,
+          openAiApiKey,
+          anthropicApiKey,
+          startIndex: completedCount,
+          previousItems,
+          onProgress: async (completedItems, completed, total) => {
+            const progressRows = mergeAnswersByQuestion(parsed.questions, completedItems);
+            await updateExperimentalRequestProgress({
+              supabase: access.supabase,
+              requestId: incompleteRun.id,
+              stage: "final",
+              flowId: targetFlowId,
+              modelName,
+              runLabel,
+              sourceRequestIds,
+              rows: progressRows,
+              completedQuestions: completed,
+              totalQuestions: total,
+            });
+          },
+        });
+
+        if (result.isComplete) {
+          const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+          await completeExperimentalRequest({
+            supabase: access.supabase,
+            requestId: incompleteRun.id,
+            stage: "final",
+            flowId: targetFlowId,
+            modelName,
+            runLabel,
+            sourceRequestIds,
+            raw: JSON.stringify({ mode: "per-question", stage: "final", items: result.items }),
+            rows: mergedRows,
+          });
+        }
+        resumed += 1;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown model error";
+        await failExperimentalRequest({ supabase: access.supabase, requestId: incompleteRun.id, message });
+      }
+      continue;
+    }
+
+    // Check if completed final already exists
+    const hasExistingFinal = completedRuns.some((run) => {
+      if (run.model_name !== modelName) return false;
+      const pr = run.parsed_response as { experimental_flow?: { flow_id?: string; stage?: string } } | null;
+      return pr?.experimental_flow?.flow_id === targetFlowId && pr.experimental_flow.stage === "final";
     });
 
     if (hasExistingFinal) {
@@ -2524,24 +2729,14 @@ export async function requestExperimentalFlowFinalRuns(
         flowId: targetFlowId,
         modelName,
         runLabel: `final_${modelName}`,
-        sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
+        sourceRequestIds,
         rows: initialRows,
       });
 
       const result = await runExperimentalPerQuestion({
         modelName,
         questions: parsed.questions,
-        buildPrompt: (question) =>
-          buildExperimentalFinalPrompt({
-            companyName: access.project.companyName,
-            prodUrl: access.project.prodUrl,
-            modelLabel: modelName,
-            question,
-            openAiSummary:
-              openAiSummaryByQuestionId.get(question.question_id.toLowerCase()) ?? null,
-            claudeSummary:
-              claudeSummaryByQuestionId.get(question.question_id.toLowerCase()) ?? null,
-          }),
+        buildPrompt: buildFinalPromptForModel,
         openAiApiKey,
         anthropicApiKey,
         onProgress: async (completedItems, completed, total) => {
@@ -2553,7 +2748,7 @@ export async function requestExperimentalFlowFinalRuns(
             flowId: targetFlowId,
             modelName,
             runLabel: `final_${modelName}`,
-            sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
+            sourceRequestIds,
             rows: progressRows,
             completedQuestions: completed,
             totalQuestions: total,
@@ -2561,32 +2756,31 @@ export async function requestExperimentalFlowFinalRuns(
         },
       });
 
-      const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
-      await completeExperimentalRequest({
-        supabase: access.supabase,
-        requestId,
-        stage: "final",
-        flowId: targetFlowId,
-        modelName,
-        runLabel: `final_${modelName}`,
-        sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
-        raw: JSON.stringify({ mode: "per-question", stage: "final", items: result.items }),
-        rows: mergedRows,
-      });
+      if (result.isComplete) {
+        const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+        await completeExperimentalRequest({
+          supabase: access.supabase,
+          requestId,
+          stage: "final",
+          flowId: targetFlowId,
+          modelName,
+          runLabel: `final_${modelName}`,
+          sourceRequestIds,
+          raw: JSON.stringify({ mode: "per-question", stage: "final", items: result.items }),
+          rows: mergedRows,
+        });
+      }
       created += 1;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Unknown model error";
-      await failExperimentalRequest({
-        supabase: access.supabase,
-        requestId,
-        message,
-      });
+      await failExperimentalRequest({ supabase: access.supabase, requestId, message });
     }
   }
 
   revalidatePath(`/projects/${projectId}/experimental-flow`);
-  return { error: null, created, flowId: targetFlowId };
+  return { error: null, created, resumed, flowId: targetFlowId };
 }
+
 
 
 export async function generateFootprintNarrative(
