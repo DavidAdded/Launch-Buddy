@@ -38,42 +38,106 @@ type ExperimentalRequest = {
 type StageKey = "base" | "summary" | "final";
 
 const DEFAULT_EXPERIMENT_TEMPLATE = `theme,question_id,question,model,run_id,answer,sources,confidence,notes
-Core Brand Image,Q1,What is Oatly in one clear sentence?,,,,,,
-Core Brand Image,Q2,How is Oatly most commonly described as a brand?,,,,,,
-Core Brand Image,Q3,What does Oatly stand for in the minds of people and AI systems?,,,,,,
-Core Brand Image,Q4,What are the strongest recurring signals in Oatly's core brand image?,,,,,,
-Associations & Positioning,Q5,Which ideas values or lifestyles are most associated with Oatly?,,,,,,
-Associations & Positioning,Q6,How is Oatly positioned relative to dairy and other plant-based brands?,,,,,,
-Associations & Positioning,Q7,Which consumer segments are most strongly associated with Oatly?,,,,,,
-Associations & Positioning,Q8,What emotional or symbolic associations appear most often around Oatly?,,,,,,
-Tone & Personality,Q9,How is Oatly's communication tone typically described?,,,,,,
-Tone & Personality,Q10,Which personality traits are most frequently attributed to Oatly?,,,,,,
-Tone & Personality,Q11,Where is Oatly's tone seen as distinctive versus polarizing?,,,,,,
-Tensions & Criticism,Q12,What are the most common criticisms or skeptical claims about Oatly?,,,,,,
-Tensions & Criticism,Q13,Which tensions or contradictions appear in how Oatly is described?,,,,,,
-Tensions & Criticism,Q14,What perception risks are most likely to harm trust in Oatly?,,,,,,
-Reasons to Choose / Avoid,Q15,What are the strongest reasons to choose Oatly?,,,,,,
-Reasons to Choose / Avoid,Q16,What are the strongest reasons to avoid Oatly?,,,,,,
-Reasons to Choose / Avoid,Q17,In which use-cases is Oatly typically recommended?,,,,,,
-Reasons to Choose / Avoid,Q18,In which use-cases is Oatly typically not recommended?,,,,,,
-Reasons to Choose / Avoid,Q19,How does AI frame trade-offs between Oatly and dairy milk?,,,,,,
-Reasons to Choose / Avoid,Q20,How does AI frame trade-offs between Oatly and other plant-based alternatives?,,,,,,
-Product Experience,Q21,How is Oatly described in taste and texture versus alternatives?,,,,,,
-Product Experience,Q22,How is Oatly perceived for coffee use-cases specifically?,,,,,,
-Product Experience,Q23,How is Oatly perceived for cooking and baking use-cases?,,,,,,
-Product Experience,Q24,What product quality criticisms are repeated most often?,,,,,,
-Health Framing,Q25,How is Oatly framed in health and nutrition discussions?,,,,,,
-Health Framing,Q26,What health-related misconceptions about Oatly appear repeatedly?,,,,,,
-Health Framing,Q27,How does AI describe sugar and ingredient concerns around Oatly?,,,,,,
-Health Framing,Q28,How does AI compare Oatly to dairy on nutrition trade-offs?,,,,,,
-Sustainability,Q29,How is Oatly's climate and sustainability story described by AI?,,,,,,
-Sustainability,Q30,Which sustainability claims are most trusted versus challenged?,,,,,,
-Sustainability,Q31,What sustainability controversies are most likely to be surfaced?,,,,,,
-Sustainability,Q32,How does AI compare Oatly sustainability against competitors?,,,,,,
-Market & Competition,Q33,How does AI position Oatly against direct oat milk competitors?,,,,,,
-Market & Competition,Q34,What brand strengths does AI attribute to Oatly in competitive context?,,,,,,
-Market & Competition,Q35,What competitive weaknesses does AI most often mention for Oatly?,,,,,,
-Market & Competition,Q36,What strategic narrative would best strengthen Oatly's AI footprint now?,,,,,,
+core_brand_image,Q01,How would you describe Oatly as a company to someone who has never heard of it?,,,,,,
+core_brand_image,Q02,What are the most defining characteristics of Oatly as a brand?,,,,,,
+core_brand_image,Q03,"If you had to summarize Oatly in one short paragraph, what would you emphasize?",,,,,,
+core_brand_image,Q04,What overall impression does Oatly leave as a brand?,,,,,,
+core_brand_image,Q05,How would you describe Oatly in simple terms?,,,,,,
+core_brand_image,Q06,What kind of company does Oatly come across as?,,,,,,
+core_brand_image,Q07,"If someone asked what Oatly is really known for, what would you say?",,,,,,
+associations_positioning,Q08,What values are most strongly associated with Oatly?,,,,,,
+associations_positioning,Q09,What ideas are most strongly associated with Oatly?,,,,,,
+associations_positioning,Q10,What themes are most strongly associated with Oatly?,,,,,,
+associations_positioning,Q11,What makes Oatly distinct from other plant-based food and drink brands?,,,,,,
+associations_positioning,Q12,"Does Oatly come across more as a food company, a lifestyle brand, a mission-driven company, or something else?",,,,,,
+associations_positioning,Q13,What kind of consumer is Oatly most commonly associated with?,,,,,,
+associations_positioning,Q14,What kind of audience is Oatly most commonly associated with?,,,,,,
+associations_positioning,Q15,What role does Oatly seem to play in culture or public conversation beyond just being a food or drink brand?,,,,,,
+tone_personality,Q16,How would you characterize Oatly’s tone?,,,,,,
+tone_personality,Q17,How would you characterize Oatly’s personality?,,,,,,
+tone_personality,Q18,How would you characterize Oatly’s communication style?,,,,,,
+tone_personality,Q19,"Does Oatly come across as playful, provocative, progressive, commercial, premium, mainstream, or something else?",,,,,,
+tone_personality,Q20,Does Oatly appear more like a challenger brand or an established brand today?,,,,,,
+tone_personality,Q21,"If Oatly were a person, how would you describe its personality and public persona?",,,,,,
+tone_personality,Q22,How does Oatly come across in the way it communicates?,,,,,,
+tone_personality,Q23,What kind of personality does Oatly project?,,,,,,
+tone_personality,Q24,"Does Oatly feel more playful, political, or commercial?",,,,,,
+reasons_to_choose,Q25,Why might someone choose Oatly over dairy milk or other plant-based alternatives?,,,,,,
+reasons_to_choose,Q26,What are the main benefits people might associate with drinking Oatly?,,,,,,
+reasons_to_choose,Q27,For what kind of person does Oatly seem like a strong fit?,,,,,,
+reasons_to_choose,Q28,For what kind of preference does Oatly seem like a strong fit?,,,,,,
+reasons_to_choose,Q29,For what kind of need does Oatly seem like a strong fit?,,,,,,
+reasons_to_choose,Q30,What product qualities make Oatly feel like an appealing choice?,,,,,,
+reasons_to_choose,Q31,What brand associations make Oatly feel like an appealing choice?,,,,,,
+reasons_to_choose,Q32,Why do people choose Oatly?,,,,,,
+reasons_to_choose,Q33,What makes Oatly appealing to people?,,,,,,
+reasons_to_choose,Q34,In what situations does Oatly seem like a strong choice?,,,,,,
+reasons_to_choose,Q35,What practical reasons might make someone choose Oatly?,,,,,,
+reasons_to_avoid,Q36,Why might someone choose not to drink Oatly?,,,,,,
+reasons_to_avoid,Q37,What are the main concerns people might associate with drinking Oatly?,,,,,,
+reasons_to_avoid,Q38,What are the main drawbacks people might associate with drinking Oatly?,,,,,,
+reasons_to_avoid,Q39,In what situations might Oatly seem like a less convincing choice?,,,,,,
+reasons_to_avoid,Q40,For what concerns might Oatly seem like a less convincing choice?,,,,,,
+reasons_to_avoid,Q41,What product qualities might make someone skeptical of Oatly?,,,,,,
+reasons_to_avoid,Q42,What claims or messages might make someone skeptical of Oatly?,,,,,,
+reasons_to_avoid,Q43,What broader associations might make someone skeptical of Oatly as a brand?,,,,,,
+reasons_to_avoid,Q44,Why do some people avoid Oatly?,,,,,,
+reasons_to_avoid,Q45,What makes some people skeptical of Oatly?,,,,,,
+reasons_to_avoid,Q46,In what situations might Oatly feel like the wrong choice?,,,,,,
+criticism_tension,Q47,What criticisms are most commonly associated with Oatly?,,,,,,
+criticism_tension,Q48,What controversies are most commonly associated with Oatly?,,,,,,
+criticism_tension,Q49,What points of skepticism are most commonly associated with Oatly?,,,,,,
+criticism_tension,Q50,What tensions appear in how Oatly is described?,,,,,,
+criticism_tension,Q51,What contradictions appear in how Oatly is described?,,,,,,
+criticism_tension,Q52,What might someone admire about Oatly?,,,,,,
+criticism_tension,Q53,What might someone be skeptical of when it comes to Oatly?,,,,,,
+criticism_tension,Q54,Where does Oatly’s brand image become complicated?,,,,,,
+criticism_tension,Q55,Where does Oatly’s brand image become contested?,,,,,,
+criticism_tension,Q56,Where does Oatly’s brand image become polarizing?,,,,,,
+criticism_tension,Q57,What product-related criticisms are most associated with Oatly?,,,,,,
+criticism_tension,Q58,What brand or communication-related criticisms are most associated with Oatly?,,,,,,
+criticism_tension,Q59,What company-level or reputation-related criticisms are most associated with Oatly?,,,,,,
+simplification_distortion,Q60,What is the most common simplified version of Oatly that an AI-generated answer might produce?,,,,,,
+simplification_distortion,Q61,What aspects of Oatly are most likely to be overemphasized in a short AI-generated description?,,,,,,
+simplification_distortion,Q62,What aspects of Oatly are most likely to be underemphasized in a short AI-generated description?,,,,,,
+simplification_distortion,Q63,What nuance is often lost when Oatly is described briefly?,,,,,,
+simplification_distortion,Q64,"If an AI system had to compress Oatly into a few familiar ideas, what would those ideas most likely be?",,,,,,
+comparative_framing,Q65,"Compared with other plant-based brands, how does Oatly typically come across?",,,,,,
+comparative_framing,Q66,What makes Oatly feel more distinctive than many other food and beverage brands?,,,,,,
+comparative_framing,Q67,What makes Oatly feel more controversial than many other food and beverage brands?,,,,,,
+comparative_framing,Q68,"Does Oatly seem more product-driven, values-driven, or marketing-driven?",,,,,,
+meta_reflection,Q69,What is the easiest narrative about Oatly for an AI system to produce?,,,,,,
+meta_reflection,Q70,What is the hardest part of Oatly to capture fairly in a short AI-generated answer?,,,,,,
+meta_reflection,Q71,"If an AI-generated description of Oatly feels incomplete, what is it most likely missing?",,,,,,
+meta_reflection,Q72,What is Oatly most likely to be reduced to in public digital discourse?,,,,,,
+human_queries,Q73,Should I drink Oatly?,,,,,,
+human_queries,Q74,Is Oatly healthy?,,,,,,
+human_queries,Q75,Is Oatly bad for you?,,,,,,
+human_queries,Q76,Is Oatly actually sustainable?,,,,,,
+human_queries,Q77,Why do people like Oatly?,,,,,,
+human_queries,Q78,Why do some people avoid Oatly?,,,,,,
+human_queries,Q79,Is Oatly better than regular milk?,,,,,,
+human_queries,Q80,Is Oatly better than other oat milk brands?,,,,,,
+human_queries,Q81,Is Oatly the best oat milk for coffee?,,,,,,
+human_queries,Q82,Why is Oatly controversial?,,,,,,
+human_queries,Q83,Is Oatly overhyped?,,,,,,
+human_queries,Q84,Why do some people trust Oatly and others don’t?,,,,,,
+indirect_context,Q85,What’s the healthiest milk alternative?,,,,,,
+indirect_context,Q86,Which milk alternative is generally considered best for people who want a healthier option?,,,,,,
+indirect_context,Q87,What oat milk works best in coffee?,,,,,,
+indirect_context,Q88,Which oat milk brand is best for coffee drinks like lattes and cappuccinos?,,,,,,
+indirect_context,Q89,What brands are considered most sustainable in plant-based milk?,,,,,,
+indirect_context,Q90,Which plant-based milk brands are most associated with sustainability?,,,,,,
+indirect_context,Q91,Which oat milk brands are controversial?,,,,,,
+indirect_context,Q92,What brands in the oat milk category tend to attract criticism or debate?,,,,,,
+indirect_context,Q93,Which oat milk brands are most popular?,,,,,,
+indirect_context,Q94,Which oat milk brands have the strongest cultural presence or brand recognition?,,,,,,
+indirect_context,Q95,Which oat milk brands are most widely used in cafes?,,,,,,
+indirect_context,Q96,What plant-based milk brands are most associated with barista culture or coffee shops?,,,,,,
+indirect_context,Q97,Which plant-based milk brands feel the most values-driven?,,,,,,
+indirect_context,Q98,Which food or drink brands in the plant-based space feel the most polarizing?,,,,,,
+indirect_context,Q99,Which oat milk brands feel the most mainstream?,,,,,,
+indirect_context,Q100,Which oat milk brands feel the most niche?,,,,,,
 `;
 
 export function ExperimentalFlowView({
@@ -88,8 +152,9 @@ export function ExperimentalFlowView({
   requests: ExperimentalRequest[];
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [templateName, setTemplateName] = useState<string>("default-36-questions.csv");
+  const [templateName, setTemplateName] = useState<string>("oatly-answer-template-v2.csv");
   const [templateCsv, setTemplateCsv] = useState<string>(DEFAULT_EXPERIMENT_TEMPLATE);
+  const [flowName, setFlowName] = useState<string>("default");
   const [selectedStage, setSelectedStage] = useState<StageKey>("base");
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [lastRunInfo, setLastRunInfo] = useState<string | null>(null);
@@ -99,13 +164,18 @@ export function ExperimentalFlowView({
   const [isSummaryPending, startSummaryTransition] = useTransition();
   const [isFinalPending, startFinalTransition] = useTransition();
 
+  const normalizedFlowId = flowName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") || "experimental_flow_v1";
+
   const experimentalRuns = useMemo(
     () =>
       requests.filter((request) => {
         const meta = request.parsed_response?.experimental_flow;
-        return meta?.flow_id === "experimental_flow_v1";
+        return meta?.flow_id === normalizedFlowId;
       }),
-    [requests],
+    [requests, normalizedFlowId],
   );
 
   const grouped = useMemo(() => {
@@ -142,14 +212,14 @@ export function ExperimentalFlowView({
   function runBaseStage() {
     setError(null);
     startBaseTransition(async () => {
-      const result = await requestExperimentalFlowBaseRuns(projectId, templateCsv, 10);
+      const result = await requestExperimentalFlowBaseRuns(projectId, templateCsv, normalizedFlowId);
       if (result.error) {
         setError(result.error);
         setLastRunInfo(null);
         return;
       }
       setLastRunInfo(
-        `Stage 1 completed: ${result.created ?? 0} created, ${result.failed ?? 0} failed, concurrency ${result.concurrency ?? "n/a"}.`,
+        `Stage 1 completed: ${result.created ?? 0} created, ${result.failed ?? 0} failed, ${result.skipped ?? 0} skipped.`,
       );
     });
   }
@@ -157,26 +227,26 @@ export function ExperimentalFlowView({
   function runSummaryStage() {
     setError(null);
     startSummaryTransition(async () => {
-      const result = await requestExperimentalFlowSummaryRuns(projectId, templateCsv);
+      const result = await requestExperimentalFlowSummaryRuns(projectId, templateCsv, normalizedFlowId);
       if (result.error) {
         setError(result.error);
         setLastRunInfo(null);
         return;
       }
-      setLastRunInfo(`Stage 2 completed: ${result.created ?? 0} summary runs created.`);
+      setLastRunInfo(`Stage 2 completed: ${result.created ?? 0} summary runs created for flow ${normalizedFlowId}.`);
     });
   }
 
   function runFinalStage() {
     setError(null);
     startFinalTransition(async () => {
-      const result = await requestExperimentalFlowFinalRuns(projectId, templateCsv);
+      const result = await requestExperimentalFlowFinalRuns(projectId, templateCsv, normalizedFlowId);
       if (result.error) {
         setError(result.error);
         setLastRunInfo(null);
         return;
       }
-      setLastRunInfo(`Stage 3 completed: ${result.created ?? 0} final runs created.`);
+      setLastRunInfo(`Stage 3 completed: ${result.created ?? 0} final runs created for flow ${normalizedFlowId}.`);
     });
   }
 
@@ -206,7 +276,7 @@ export function ExperimentalFlowView({
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="inline-flex cursor-pointer items-center rounded-full border border-zinc-300 px-4 py-2 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-            Upload 36-question CSV
+            Upload template CSV
             <input
               type="file"
               accept=".csv,text/csv"
@@ -221,6 +291,20 @@ export function ExperimentalFlowView({
 
           <span className="text-xs text-zinc-500 dark:text-zinc-400">
             Template: {templateName}
+          </span>
+
+          <label className="flex items-center gap-2 rounded-full border border-zinc-300 px-3 py-1.5 text-xs text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">
+            Flow
+            <input
+              value={flowName}
+              onChange={(event) => setFlowName(event.target.value)}
+              className="w-40 bg-transparent outline-none"
+              placeholder="default"
+            />
+          </label>
+
+          <span className="text-xs text-zinc-500 dark:text-zinc-400">
+            flow_id: {normalizedFlowId}
           </span>
 
           <button

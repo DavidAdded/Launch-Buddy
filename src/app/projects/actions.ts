@@ -1442,6 +1442,7 @@ type ExperimentalModelAnswer = {
 };
 
 const EXPERIMENTAL_FLOW_ID = "experimental_flow_v1";
+const EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL = 10;
 const EXPERIMENTAL_OPENAI_MODEL = "gpt-5.2";
 const EXPERIMENTAL_CLAUDE_MODEL = "claude-sonnet-4.5";
 
@@ -1507,6 +1508,14 @@ function coerceExperimentalAnswer(raw: ExperimentalModelAnswer): ExperimentalMod
   };
 }
 
+function normalizeExperimentalFlowId(flowId: string | undefined | null) {
+  const cleaned = (flowId ?? "").trim();
+  if (!cleaned) {
+    return EXPERIMENTAL_FLOW_ID;
+  }
+  return cleaned.toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+}
+
 function parseExperimentalTemplateQuestions(csvTemplate: string) {
   const parsedTemplate = parseFootprintV2Template(csvTemplate);
   if (parsedTemplate.error) {
@@ -1519,16 +1528,16 @@ function parseExperimentalTemplateQuestions(csvTemplate: string) {
     question: row.question,
   }));
 
-  const hasDuplicates = new Set<string>();
+  const hasQuestionIds = new Set<string>();
   for (const q of questions) {
-    const key = `${q.theme.toLowerCase()}::${q.question_id.toLowerCase()}`;
-    if (hasDuplicates.has(key)) {
+    const key = q.question_id.toLowerCase();
+    if (hasQuestionIds.has(key)) {
       return {
-        error: `Duplicate question_id detected within theme: ${q.theme} / ${q.question_id}`,
+        error: `Duplicate question_id detected: ${q.question_id}. question_id must be globally unique.`,
         questions: [] as ExperimentalTemplateQuestion[],
       };
     }
-    hasDuplicates.add(key);
+    hasQuestionIds.add(key);
   }
 
   return { error: null, questions };
@@ -1773,6 +1782,7 @@ async function completeExperimentalRequest(params: {
   supabase: Awaited<ReturnType<typeof createClient>>;
   requestId: string;
   stage: ExperimentalFlowStage;
+  flowId: string;
   modelName: string;
   runLabel: string;
   sourceRequestIds?: string[];
@@ -1786,7 +1796,7 @@ async function completeExperimentalRequest(params: {
       status: params.errorMessage ? "error" : "completed",
       raw_response: JSON.stringify({
         experimental_flow: {
-          flow_id: EXPERIMENTAL_FLOW_ID,
+          flow_id: params.flowId,
           stage: params.stage,
           model: params.modelName,
           run_label: params.runLabel,
@@ -1796,7 +1806,7 @@ async function completeExperimentalRequest(params: {
       }),
       parsed_response: {
         experimental_flow: {
-          flow_id: EXPERIMENTAL_FLOW_ID,
+          flow_id: params.flowId,
           stage: params.stage,
           model: params.modelName,
           run_label: params.runLabel,
@@ -1895,79 +1905,70 @@ async function runExperimentalModelCall(params: {
   });
 }
 
-type ExperimentalBaseTask = {
-  modelName: typeof EXPERIMENTAL_OPENAI_MODEL | typeof EXPERIMENTAL_CLAUDE_MODEL;
-  runIndex: number;
-};
-
-async function runInBatches<T>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<void>,
-) {
-  if (items.length === 0) {
-    return;
-  }
-
-  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
-  let nextIndex = 0;
-
-  await Promise.all(
-    Array.from({ length: safeConcurrency }, async () => {
-      while (nextIndex < items.length) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        await worker(items[currentIndex]);
-      }
-    }),
-  );
-}
-
 export async function requestExperimentalFlowBaseRuns(
   projectId: string,
   csvTemplate: string,
-  iterations = 10,
+  flowId?: string,
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
-    return { error: access.error ?? "Access error", created: 0, failed: 0 };
+    return { error: access.error ?? "Access error", created: 0, failed: 0, skipped: 0 };
   }
+
+  const targetFlowId = normalizeExperimentalFlowId(flowId);
+
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
-    return { error: "OpenAI API key is not configured.", created: 0, failed: 0 };
+    return { error: "OpenAI API key is not configured.", created: 0, failed: 0, skipped: 0 };
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
   if (!anthropicApiKey) {
-    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, failed: 0 };
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, failed: 0, skipped: 0 };
   }
 
   const parsed = parseExperimentalTemplateQuestions(csvTemplate);
   if (parsed.error) {
-    return { error: parsed.error, created: 0, failed: 0 };
+    return { error: parsed.error, created: 0, failed: 0, skipped: 0 };
   }
 
-  const safeIterations = Math.max(1, Math.min(10, Math.floor(iterations)));
   const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
-  const tasks: ExperimentalBaseTask[] = [];
 
-  for (const modelName of models) {
-    for (let runIndex = 1; runIndex <= safeIterations; runIndex += 1) {
-      tasks.push({ modelName, runIndex });
+  const { data: existingRuns } = await access.supabase
+    .from("footprint_requests")
+    .select("id, model_name, parsed_response, status")
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: false });
+
+  const runCounts = new Map<string, number>();
+  for (const row of existingRuns ?? []) {
+    const parsedResponse = row.parsed_response as {
+      experimental_flow?: { flow_id?: string; stage?: string };
+    } | null;
+
+    if (
+      parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
+      parsedResponse.experimental_flow.stage === "base"
+    ) {
+      runCounts.set(row.model_name, (runCounts.get(row.model_name) ?? 0) + 1);
     }
   }
 
-  const configuredConcurrency = Number(process.env.EXPERIMENTAL_FLOW_BASE_CONCURRENCY ?? "4");
-  const concurrency = Number.isFinite(configuredConcurrency)
-    ? Math.max(1, Math.min(8, Math.floor(configuredConcurrency)))
-    : 4;
-
   let created = 0;
   let failed = 0;
+  let skipped = 0;
 
-  await runInBatches(tasks, concurrency, async ({ modelName, runIndex }) => {
-    const runLabel = `base_${modelName}_run_${runIndex}`;
+  for (const modelName of models) {
+    const currentCount = runCounts.get(modelName) ?? 0;
+    const nextRunIndex = currentCount + 1;
+
+    if (nextRunIndex > EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL) {
+      skipped += 1;
+      continue;
+    }
+
+    const runLabel = `base_run_${nextRunIndex}`;
     const requestId = await createExperimentalRequest({
       supabase: access.supabase,
       projectId,
@@ -1997,6 +1998,7 @@ export async function requestExperimentalFlowBaseRuns(
         supabase: access.supabase,
         requestId,
         stage: "base",
+        flowId: targetFlowId,
         modelName,
         runLabel,
         raw: result.raw,
@@ -2012,21 +2014,23 @@ export async function requestExperimentalFlowBaseRuns(
       });
       failed += 1;
     }
-  });
+  }
 
   revalidatePath(`/projects/${projectId}/experimental-flow`);
-  return { error: null, created, failed, concurrency };
+  return { error: null, created, failed, skipped, flowId: targetFlowId };
 }
 
 export async function requestExperimentalFlowSummaryRuns(
-
   projectId: string,
   csvTemplate: string,
+  flowId?: string,
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
     return { error: access.error ?? "Access error", created: 0 };
   }
+
+  const targetFlowId = normalizeExperimentalFlowId(flowId);
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
@@ -2063,7 +2067,7 @@ export async function requestExperimentalFlowSummaryRuns(
     } | null;
 
     return (
-      parsedResponse?.experimental_flow?.flow_id === EXPERIMENTAL_FLOW_ID &&
+      parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
       parsedResponse.experimental_flow.stage === "base" &&
       Array.isArray(parsedResponse.rows)
     );
@@ -2073,9 +2077,24 @@ export async function requestExperimentalFlowSummaryRuns(
   let created = 0;
 
   for (const modelName of models) {
+    const hasExistingSummary = (existingRuns ?? []).some((run) => {
+      if (run.model_name !== modelName) return false;
+      const parsedResponse = run.parsed_response as {
+        experimental_flow?: { flow_id?: string; stage?: string };
+      } | null;
+      return (
+        parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
+        parsedResponse.experimental_flow.stage === "summary"
+      );
+    });
+
+    if (hasExistingSummary) {
+      continue;
+    }
+
     const modelRuns = baseRuns
       .filter((run) => run.model_name === modelName)
-      .slice(0, 10)
+      .slice(0, EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL)
       .map((run, index) => {
         const parsedResponse = run.parsed_response as {
           rows: Array<{
@@ -2136,6 +2155,7 @@ export async function requestExperimentalFlowSummaryRuns(
         supabase: access.supabase,
         requestId,
         stage: "summary",
+        flowId: targetFlowId,
         modelName,
         runLabel: `summary_${modelName}`,
         sourceRequestIds: modelRuns.map((run) => run.requestId),
@@ -2154,17 +2174,20 @@ export async function requestExperimentalFlowSummaryRuns(
   }
 
   revalidatePath(`/projects/${projectId}/experimental-flow`);
-  return { error: null, created };
+  return { error: null, created, flowId: targetFlowId };
 }
 
 export async function requestExperimentalFlowFinalRuns(
   projectId: string,
   csvTemplate: string,
+  flowId?: string,
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
     return { error: access.error ?? "Access error", created: 0 };
   }
+
+  const targetFlowId = normalizeExperimentalFlowId(flowId);
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
@@ -2201,7 +2224,7 @@ export async function requestExperimentalFlowFinalRuns(
     } | null;
 
     return (
-      parsedResponse?.experimental_flow?.flow_id === EXPERIMENTAL_FLOW_ID &&
+      parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
       parsedResponse.experimental_flow.stage === "summary" &&
       Array.isArray(parsedResponse.rows)
     );
@@ -2236,6 +2259,21 @@ export async function requestExperimentalFlowFinalRuns(
   let created = 0;
 
   for (const modelName of models) {
+    const hasExistingFinal = (existingRuns ?? []).some((run) => {
+      if (run.model_name !== modelName) return false;
+      const parsedResponse = run.parsed_response as {
+        experimental_flow?: { flow_id?: string; stage?: string };
+      } | null;
+      return (
+        parsedResponse?.experimental_flow?.flow_id === targetFlowId &&
+        parsedResponse.experimental_flow.stage === "final"
+      );
+    });
+
+    if (hasExistingFinal) {
+      continue;
+    }
+
     const requestId = await createExperimentalRequest({
       supabase: access.supabase,
       projectId,
@@ -2266,6 +2304,7 @@ export async function requestExperimentalFlowFinalRuns(
         supabase: access.supabase,
         requestId,
         stage: "final",
+        flowId: targetFlowId,
         modelName,
         runLabel: `final_${modelName}`,
         sourceRequestIds: [latestOpenAi.id, latestClaude.id],
@@ -2284,11 +2323,12 @@ export async function requestExperimentalFlowFinalRuns(
   }
 
   revalidatePath(`/projects/${projectId}/experimental-flow`);
-  return { error: null, created };
+  return { error: null, created, flowId: targetFlowId };
 }
 
 
 export async function generateFootprintNarrative(
+
   projectId: string,
   requestId?: string,
 ) {
