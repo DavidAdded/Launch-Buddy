@@ -1547,29 +1547,22 @@ function buildExperimentalBasePrompt(params: {
   companyName: string;
   prodUrl: string;
   modelLabel: string;
-  questions: ExperimentalTemplateQuestion[];
+  question: ExperimentalTemplateQuestion;
 }) {
-  const rows = params.questions
-    .map(
-      (q, index) =>
-        `${index + 1}. theme=${q.theme} | question_id=${q.question_id}\n   question=${q.question}`,
-    )
-    .join("\n");
-
   return `You are filling an experimental brand footprint questionnaire for ${params.companyName}.
 
 Company: ${params.companyName}
 Website: ${params.prodUrl}
 Target model label: ${params.modelLabel}
 
-You must answer all questions and return JSON only.
-
-QUESTIONS
-${rows}
+QUESTION
+theme=${params.question.theme}
+question_id=${params.question.question_id}
+question=${params.question.question}
 
 RULES
-- Provide one output item per question_id.
-- Keep answers specific and evidence-oriented.
+- Return exactly one item in the JSON output for the provided question_id.
+- Keep answer specific and evidence-oriented.
 - confidence must be 0..1.
 - notes should capture caveats and uncertainty.
 - sources should contain 1-5 real sources when possible (title + url).
@@ -1580,40 +1573,39 @@ function buildExperimentalSummaryPrompt(params: {
   companyName: string;
   prodUrl: string;
   modelLabel: string;
-  questions: ExperimentalTemplateQuestion[];
-  runs: Array<{ runLabel: string; items: ExperimentalModelAnswer[] }>;
+  question: ExperimentalTemplateQuestion;
+  runs: Array<{
+    runLabel: string;
+    answer: string;
+    confidence: number;
+    notes: string;
+    sources: Array<{ title: string; url: string }>;
+  }>;
 }) {
   const runDigest = params.runs
-    .map((run) => {
-      const compact = run.items.map((item) => ({
-        question_id: item.question_id,
-        answer: item.answer,
-        confidence: item.confidence,
-        notes: item.notes,
-      }));
-      return `${run.runLabel}: ${JSON.stringify(compact)}`;
-    })
+    .map(
+      (run) =>
+        `${run.runLabel}: ${JSON.stringify({ answer: run.answer, confidence: run.confidence, notes: run.notes, sources: run.sources })}`,
+    )
     .join("\n\n");
 
-  const questionList = params.questions
-    .map((q) => `${q.theme} | ${q.question_id} | ${q.question}`)
-    .join("\n");
-
-  return `You are creating one stable synthesis run from multiple runs produced by the same model.
+  return `You are creating one stable synthesis answer from multiple runs produced by the same model.
 
 Company: ${params.companyName}
 Website: ${params.prodUrl}
 Model label: ${params.modelLabel}
 
-TARGET QUESTIONS
-${questionList}
+TARGET QUESTION
+theme=${params.question.theme}
+question_id=${params.question.question_id}
+question=${params.question.question}
 
 INPUT RUNS
 ${runDigest}
 
 TASK
-Produce one consolidated answer set that reflects the most stable cross-run signal.
-Return JSON only matching schema with exactly one item per question_id.
+Produce one consolidated answer for this question_id.
+Return JSON only matching schema with exactly one item.
 Use notes to explain conflicts across runs.`;
 }
 
@@ -1621,33 +1613,31 @@ function buildExperimentalFinalPrompt(params: {
   companyName: string;
   prodUrl: string;
   modelLabel: string;
-  questions: ExperimentalTemplateQuestion[];
-  openAiSummary: ExperimentalModelAnswer[];
-  claudeSummary: ExperimentalModelAnswer[];
+  question: ExperimentalTemplateQuestion;
+  openAiSummary: ExperimentalModelAnswer | null;
+  claudeSummary: ExperimentalModelAnswer | null;
 }) {
-  const compactQuestions = params.questions
-    .map((q) => `${q.theme} | ${q.question_id} | ${q.question}`)
-    .join("\n");
-
-  return `You are creating the final consensus run from two model summaries.
+  return `You are creating the final consensus answer from two model summaries.
 
 Company: ${params.companyName}
 Website: ${params.prodUrl}
 Current model: ${params.modelLabel}
 
-QUESTIONS (must return all)
-${compactQuestions}
+TARGET QUESTION
+theme=${params.question.theme}
+question_id=${params.question.question_id}
+question=${params.question.question}
 
-SUMMARY RUN FROM GPT-5.2
+SUMMARY FROM GPT-5.2
 ${JSON.stringify(params.openAiSummary)}
 
-SUMMARY RUN FROM CLAUDE SONNET 4.5
+SUMMARY FROM CLAUDE SONNET 4.5
 ${JSON.stringify(params.claudeSummary)}
 
 TASK
-Create one final set of answers with one item per question_id.
-Balance both model summaries, preserve stable overlap, and explicitly note disagreements in notes.
-Return JSON only matching schema.`;
+Create one final answer for this question_id.
+Balance both summaries, preserve stable overlap, and explicitly note disagreements in notes.
+Return JSON only matching schema with exactly one item.`;
 }
 
 async function callOpenAiExperimentalAnswers(params: {
@@ -1884,6 +1874,43 @@ async function verifyExperimentalProjectAccess(projectId: string) {
   };
 }
 
+async function runExperimentalPerQuestion(params: {
+  modelName: string;
+  questions: ExperimentalTemplateQuestion[];
+  buildPrompt: (question: ExperimentalTemplateQuestion) => string;
+  openAiApiKey: string;
+  anthropicApiKey?: string;
+}) {
+  const items: ExperimentalModelAnswer[] = [];
+
+  for (const question of params.questions) {
+    const result = await runExperimentalModelCall({
+      modelName: params.modelName,
+      prompt: params.buildPrompt(question),
+      openAiApiKey: params.openAiApiKey,
+      anthropicApiKey: params.anthropicApiKey,
+    });
+
+    const matched = result.items.find(
+      (item) => item.question_id.toLowerCase() === question.question_id.toLowerCase(),
+    );
+
+    items.push(
+      matched
+        ? matched
+        : {
+            question_id: question.question_id,
+            answer: "No answer provided.",
+            confidence: 0,
+            notes: "Model did not return an item for this question_id.",
+            sources: [],
+          },
+    );
+  }
+
+  return { raw: null as string | null, items };
+}
+
 async function runExperimentalModelCall(params: {
   modelName: string;
   prompt: string;
@@ -1921,7 +1948,6 @@ export async function requestExperimentalFlowBaseRuns(
   }
 
   const targetFlowId = normalizeExperimentalFlowId(flowId);
-
 
   const openAiApiKey = process.env.OPENAI_API_KEY;
   if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
@@ -1985,16 +2011,16 @@ export async function requestExperimentalFlowBaseRuns(
     });
 
     try {
-      const prompt = buildExperimentalBasePrompt({
-        companyName: access.project.companyName,
-        prodUrl: access.project.prodUrl,
-        modelLabel: modelName,
-        questions: parsed.questions,
-      });
-
-      const result = await runExperimentalModelCall({
+      const result = await runExperimentalPerQuestion({
         modelName,
-        prompt,
+        questions: parsed.questions,
+        buildPrompt: (question) =>
+          buildExperimentalBasePrompt({
+            companyName: access.project.companyName,
+            prodUrl: access.project.prodUrl,
+            modelLabel: modelName,
+            question,
+          }),
         openAiApiKey,
         anthropicApiKey,
       });
@@ -2008,7 +2034,7 @@ export async function requestExperimentalFlowBaseRuns(
         flowId: targetFlowId,
         modelName,
         runLabel,
-        raw: result.raw,
+        raw: JSON.stringify({ mode: "per-question", stage: "base", items: result.items }),
         rows: mergedRows,
       });
       created += 1;
@@ -2116,16 +2142,23 @@ export async function requestExperimentalFlowSummaryRuns(
           }>;
         };
 
+        const byQuestionId = new Map(
+          parsedResponse.rows.map((row) => [
+            row.question_id.toLowerCase(),
+            {
+              question_id: row.question_id,
+              answer: row.answer,
+              confidence: row.confidence,
+              notes: row.notes,
+              sources: row.sources,
+            },
+          ]),
+        );
+
         return {
           requestId: run.id,
           runLabel: `input_run_${index + 1}`,
-          items: parsedResponse.rows.map((row) => ({
-            question_id: row.question_id,
-            answer: row.answer,
-            confidence: row.confidence,
-            notes: row.notes,
-            sources: row.sources,
-          })),
+          byQuestionId,
         };
       });
 
@@ -2142,20 +2175,27 @@ export async function requestExperimentalFlowSummaryRuns(
     });
 
     try {
-      const prompt = buildExperimentalSummaryPrompt({
-        companyName: access.project.companyName,
-        prodUrl: access.project.prodUrl,
-        modelLabel: modelName,
-        questions: parsed.questions,
-        runs: modelRuns.map((run) => ({
-          runLabel: run.runLabel,
-          items: run.items,
-        })),
-      });
-
-      const result = await runExperimentalModelCall({
+      const result = await runExperimentalPerQuestion({
         modelName,
-        prompt,
+        questions: parsed.questions,
+        buildPrompt: (question) =>
+          buildExperimentalSummaryPrompt({
+            companyName: access.project.companyName,
+            prodUrl: access.project.prodUrl,
+            modelLabel: modelName,
+            question,
+            runs: modelRuns
+              .map((run) => ({
+                runLabel: run.runLabel,
+                ...(run.byQuestionId.get(question.question_id.toLowerCase()) ?? {
+                  answer: "No answer provided.",
+                  confidence: 0,
+                  notes: "No base run answer for this question.",
+                  sources: [],
+                }),
+              }))
+              .slice(0, EXPERIMENTAL_MAX_BASE_RUNS_PER_MODEL),
+          }),
         openAiApiKey,
         anthropicApiKey,
       });
@@ -2169,7 +2209,7 @@ export async function requestExperimentalFlowSummaryRuns(
         modelName,
         runLabel: `summary_${modelName}`,
         sourceRequestIds: modelRuns.map((run) => run.requestId),
-        raw: result.raw,
+        raw: JSON.stringify({ mode: "per-question", stage: "summary", items: result.items }),
         rows: mergedRows,
       });
       created += 1;
@@ -2258,22 +2298,34 @@ export async function requestExperimentalFlowFinalRuns(
     };
   }
 
-  const openAiSummaryRows = ((latestOpenAi.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []).map((row) => ({
-    question_id: row.question_id,
-    answer: row.answer,
-    confidence: row.confidence,
-    notes: row.notes,
-    sources: row.sources,
-  }));
-  const claudeSummaryRows = latestClaude
-    ? ((latestClaude.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []).map((row) => ({
+  const openAiSummaryByQuestionId = new Map(
+    (((latestOpenAi.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []) as ReturnType<typeof mergeAnswersByQuestion>).map((row) => [
+      row.question_id.toLowerCase(),
+      {
         question_id: row.question_id,
         answer: row.answer,
         confidence: row.confidence,
         notes: row.notes,
         sources: row.sources,
-      }))
-    : [];
+      },
+    ]),
+  );
+
+  const claudeSummaryByQuestionId = new Map(
+    (latestClaude
+      ? (((latestClaude.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []) as ReturnType<typeof mergeAnswersByQuestion>)
+      : []
+    ).map((row) => [
+      row.question_id.toLowerCase(),
+      {
+        question_id: row.question_id,
+        answer: row.answer,
+        confidence: row.confidence,
+        notes: row.notes,
+        sources: row.sources,
+      },
+    ]),
+  );
 
   const models = includeClaude
     ? ([EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const)
@@ -2305,18 +2357,20 @@ export async function requestExperimentalFlowFinalRuns(
     });
 
     try {
-      const prompt = buildExperimentalFinalPrompt({
-        companyName: access.project.companyName,
-        prodUrl: access.project.prodUrl,
-        modelLabel: modelName,
-        questions: parsed.questions,
-        openAiSummary: openAiSummaryRows,
-        claudeSummary: claudeSummaryRows,
-      });
-
-      const result = await runExperimentalModelCall({
+      const result = await runExperimentalPerQuestion({
         modelName,
-        prompt,
+        questions: parsed.questions,
+        buildPrompt: (question) =>
+          buildExperimentalFinalPrompt({
+            companyName: access.project.companyName,
+            prodUrl: access.project.prodUrl,
+            modelLabel: modelName,
+            question,
+            openAiSummary:
+              openAiSummaryByQuestionId.get(question.question_id.toLowerCase()) ?? null,
+            claudeSummary:
+              claudeSummaryByQuestionId.get(question.question_id.toLowerCase()) ?? null,
+          }),
         openAiApiKey,
         anthropicApiKey,
       });
@@ -2330,7 +2384,7 @@ export async function requestExperimentalFlowFinalRuns(
         modelName,
         runLabel: `final_${modelName}`,
         sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
-        raw: result.raw,
+        raw: JSON.stringify({ mode: "per-question", stage: "final", items: result.items }),
         rows: mergedRows,
       });
       created += 1;
@@ -2350,7 +2404,6 @@ export async function requestExperimentalFlowFinalRuns(
 
 
 export async function generateFootprintNarrative(
-
   projectId: string,
   requestId?: string,
 ) {
