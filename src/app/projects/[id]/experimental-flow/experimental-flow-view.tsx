@@ -154,8 +154,8 @@ export function ExperimentalFlowView({
   const [error, setError] = useState<string | null>(null);
   const [templateName, setTemplateName] = useState<string>("oatly-answer-template-v2.csv");
   const [templateCsv, setTemplateCsv] = useState<string>(DEFAULT_EXPERIMENT_TEMPLATE);
-  const [flowName, setFlowName] = useState<string>("default");
-  const [includeClaude, setIncludeClaude] = useState<boolean>(true);
+  const [flowName, setFlowName] = useState<string>("test");
+  const [includeClaude, setIncludeClaude] = useState<boolean>(false);
   const [selectedStage, setSelectedStage] = useState<StageKey>("base");
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [lastRunInfo, setLastRunInfo] = useState<string | null>(null);
@@ -168,7 +168,7 @@ export function ExperimentalFlowView({
   const normalizedFlowId = flowName
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-") || "experimental_flow_v1";
+    .replace(/[^a-z0-9_-]+/g, "-") || "test";
 
   const experimentalRuns = useMemo(
     () =>
