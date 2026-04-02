@@ -507,6 +507,9 @@ create policy "Users can delete public project footprint requests"
 create index if not exists idx_footprint_requests_project_id
   on public.footprint_requests (project_id, created_at desc);
 
+create index if not exists idx_footprint_requests_model_name
+  on public.footprint_requests (project_id, model_name, created_at desc);
+
 -- =============================================================================
 -- 9. FORTNOX TOKENS TABLE
 -- =============================================================================

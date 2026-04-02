@@ -111,6 +111,14 @@ export default async function ProjectDetailPage({
       stat: project.prod_url ? "Ready to analyze" : "Set Production URL first",
       icon: "spark",
     },
+    {
+      title: "Experimental flow",
+      description:
+        "Run 10x dual-model experiments, synthesize stable summaries, and inspect every JSON run.",
+      href: `/projects/${id}/experimental-flow`,
+      stat: "Multi-stage AI consensus",
+      icon: "flask",
+    },
   ];
 
   return (
@@ -324,6 +332,25 @@ function CardIcon({ type }: { type: string }) {
           <path d="M3.5 4.5h3" />
           <path d="M19 17v4" />
           <path d="M17 19h4" />
+        </svg>
+      );
+    case "flask":
+      return (
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="text-zinc-500 dark:text-zinc-400"
+        >
+          <path d="M10 2v7l-5.4 9.4A2 2 0 0 0 6.3 21h11.4a2 2 0 0 0 1.7-2.6L14 9V2" />
+          <path d="M8.5 2h7" />
+          <path d="M7 16h10" />
         </svg>
       );
     default:

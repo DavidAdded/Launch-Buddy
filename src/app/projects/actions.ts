@@ -1424,6 +1424,870 @@ export async function requestFootprintV2TemplateFill(
   }
 }
 
+
+type ExperimentalFlowStage = "base" | "summary" | "final";
+
+type ExperimentalTemplateQuestion = {
+  theme: string;
+  question_id: string;
+  question: string;
+};
+
+type ExperimentalModelAnswer = {
+  question_id: string;
+  answer: string;
+  confidence: number;
+  notes: string;
+  sources: Array<{ title: string; url: string }>;
+};
+
+const EXPERIMENTAL_FLOW_ID = "experimental_flow_v1";
+const EXPERIMENTAL_OPENAI_MODEL = "gpt-5.2";
+const EXPERIMENTAL_CLAUDE_MODEL = "claude-sonnet-4.5";
+
+const EXPERIMENTAL_JSON_SCHEMA = {
+  type: "json_schema" as const,
+  name: "experimental_flow_answers",
+  strict: true,
+  schema: {
+    type: "object",
+    properties: {
+      items: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            question_id: { type: "string" },
+            answer: { type: "string" },
+            confidence: { type: "number" },
+            notes: { type: "string" },
+            sources: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  url: { type: "string" },
+                },
+                required: ["title", "url"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["question_id", "answer", "confidence", "notes", "sources"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["items"],
+    additionalProperties: false,
+  },
+};
+
+function coerceExperimentalAnswer(raw: ExperimentalModelAnswer): ExperimentalModelAnswer {
+  return {
+    question_id: typeof raw.question_id === "string" ? raw.question_id.trim() : "",
+    answer:
+      typeof raw.answer === "string" && raw.answer.trim()
+        ? raw.answer.trim()
+        : "No answer provided.",
+    confidence:
+      typeof raw.confidence === "number" && Number.isFinite(raw.confidence)
+        ? Math.max(0, Math.min(1, raw.confidence))
+        : 0,
+    notes: typeof raw.notes === "string" ? raw.notes.trim() : "",
+    sources: Array.isArray(raw.sources)
+      ? raw.sources
+          .filter((source) => Boolean(source?.title && source?.url))
+          .map((source) => ({
+            title: source.title.trim(),
+            url: source.url.trim(),
+          }))
+      : [],
+  };
+}
+
+function parseExperimentalTemplateQuestions(csvTemplate: string) {
+  const parsedTemplate = parseFootprintV2Template(csvTemplate);
+  if (parsedTemplate.error) {
+    return { error: parsedTemplate.error, questions: [] as ExperimentalTemplateQuestion[] };
+  }
+
+  const questions = parsedTemplate.rows.map((row) => ({
+    theme: row.theme,
+    question_id: row.question_id,
+    question: row.question,
+  }));
+
+  const hasDuplicates = new Set<string>();
+  for (const q of questions) {
+    const key = `${q.theme.toLowerCase()}::${q.question_id.toLowerCase()}`;
+    if (hasDuplicates.has(key)) {
+      return {
+        error: `Duplicate question_id detected within theme: ${q.theme} / ${q.question_id}`,
+        questions: [] as ExperimentalTemplateQuestion[],
+      };
+    }
+    hasDuplicates.add(key);
+  }
+
+  return { error: null, questions };
+}
+
+function buildExperimentalBasePrompt(params: {
+  companyName: string;
+  prodUrl: string;
+  modelLabel: string;
+  questions: ExperimentalTemplateQuestion[];
+}) {
+  const rows = params.questions
+    .map(
+      (q, index) =>
+        `${index + 1}. theme=${q.theme} | question_id=${q.question_id}\n   question=${q.question}`,
+    )
+    .join("\n");
+
+  return `You are filling an experimental brand footprint questionnaire for ${params.companyName}.
+
+Company: ${params.companyName}
+Website: ${params.prodUrl}
+Target model label: ${params.modelLabel}
+
+You must answer all questions and return JSON only.
+
+QUESTIONS
+${rows}
+
+RULES
+- Provide one output item per question_id.
+- Keep answers specific and evidence-oriented.
+- confidence must be 0..1.
+- notes should capture caveats and uncertainty.
+- sources should contain 1-5 real sources when possible (title + url).
+- Never fabricate URLs. Lower confidence when evidence is weak.`;
+}
+
+function buildExperimentalSummaryPrompt(params: {
+  companyName: string;
+  prodUrl: string;
+  modelLabel: string;
+  questions: ExperimentalTemplateQuestion[];
+  runs: Array<{ runLabel: string; items: ExperimentalModelAnswer[] }>;
+}) {
+  const runDigest = params.runs
+    .map((run) => {
+      const compact = run.items.map((item) => ({
+        question_id: item.question_id,
+        answer: item.answer,
+        confidence: item.confidence,
+        notes: item.notes,
+      }));
+      return `${run.runLabel}: ${JSON.stringify(compact)}`;
+    })
+    .join("\n\n");
+
+  const questionList = params.questions
+    .map((q) => `${q.theme} | ${q.question_id} | ${q.question}`)
+    .join("\n");
+
+  return `You are creating one stable synthesis run from multiple runs produced by the same model.
+
+Company: ${params.companyName}
+Website: ${params.prodUrl}
+Model label: ${params.modelLabel}
+
+TARGET QUESTIONS
+${questionList}
+
+INPUT RUNS
+${runDigest}
+
+TASK
+Produce one consolidated answer set that reflects the most stable cross-run signal.
+Return JSON only matching schema with exactly one item per question_id.
+Use notes to explain conflicts across runs.`;
+}
+
+function buildExperimentalFinalPrompt(params: {
+  companyName: string;
+  prodUrl: string;
+  modelLabel: string;
+  questions: ExperimentalTemplateQuestion[];
+  openAiSummary: ExperimentalModelAnswer[];
+  claudeSummary: ExperimentalModelAnswer[];
+}) {
+  const compactQuestions = params.questions
+    .map((q) => `${q.theme} | ${q.question_id} | ${q.question}`)
+    .join("\n");
+
+  return `You are creating the final consensus run from two model summaries.
+
+Company: ${params.companyName}
+Website: ${params.prodUrl}
+Current model: ${params.modelLabel}
+
+QUESTIONS (must return all)
+${compactQuestions}
+
+SUMMARY RUN FROM GPT-5.2
+${JSON.stringify(params.openAiSummary)}
+
+SUMMARY RUN FROM CLAUDE SONNET 4.5
+${JSON.stringify(params.claudeSummary)}
+
+TASK
+Create one final set of answers with one item per question_id.
+Balance both model summaries, preserve stable overlap, and explicitly note disagreements in notes.
+Return JSON only matching schema.`;
+}
+
+async function callOpenAiExperimentalAnswers(params: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+}) {
+  const openai = new OpenAI({ apiKey: params.apiKey });
+  const response = await openai.responses.create({
+    model: params.model,
+    tools: [{ type: "web_search" }],
+    input: params.prompt,
+    text: { format: EXPERIMENTAL_JSON_SCHEMA },
+  });
+
+  const raw = response.output_text || "";
+  if (!raw) {
+    throw new Error("OpenAI returned an empty response.");
+  }
+
+  const parsed = JSON.parse(raw) as { items: ExperimentalModelAnswer[] };
+  const items = Array.isArray(parsed.items)
+    ? parsed.items.map(coerceExperimentalAnswer)
+    : [];
+
+  return { raw, items };
+}
+
+async function callClaudeExperimentalAnswers(params: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+}) {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": params.apiKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: params.model,
+      max_tokens: 4096,
+      temperature: 0.2,
+      system:
+        "Return JSON only. No markdown. No explanations. Follow the requested schema exactly.",
+      messages: [{ role: "user", content: params.prompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Claude API error (${response.status}): ${errorText}`);
+  }
+
+  const data = (await response.json()) as {
+    content?: Array<{ type: string; text?: string }>;
+  };
+
+  const raw =
+    data.content
+      ?.filter((part) => part.type === "text" && typeof part.text === "string")
+      .map((part) => part.text)
+      .join("\n")
+      .trim() ?? "";
+
+  if (!raw) {
+    throw new Error("Claude returned an empty response.");
+  }
+
+  const jsonTextMatch = raw.match(/\{[\s\S]*\}/);
+  const jsonText = jsonTextMatch ? jsonTextMatch[0] : raw;
+
+  const parsed = JSON.parse(jsonText) as { items: ExperimentalModelAnswer[] };
+  const items = Array.isArray(parsed.items)
+    ? parsed.items.map(coerceExperimentalAnswer)
+    : [];
+
+  return { raw, items };
+}
+
+function mergeAnswersByQuestion(
+  questions: ExperimentalTemplateQuestion[],
+  answers: ExperimentalModelAnswer[],
+) {
+  const byId = new Map<string, ExperimentalModelAnswer>();
+  for (const item of answers) {
+    byId.set(item.question_id, item);
+  }
+
+  return questions.map((q) => {
+    const item = byId.get(q.question_id);
+    return {
+      theme: q.theme,
+      question_id: q.question_id,
+      question: q.question,
+      answer: item?.answer ?? "No answer provided.",
+      confidence: item?.confidence ?? 0,
+      notes: item?.notes ?? "No notes provided.",
+      sources: item?.sources ?? [],
+    };
+  });
+}
+
+async function createExperimentalRequest(params: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  projectId: string;
+  userId: string;
+  companyName: string;
+  modelName: string;
+}) {
+  const { data: request, error } = await params.supabase
+    .from("footprint_requests")
+    .insert({
+      project_id: params.projectId,
+      requested_by: params.userId,
+      model_name: params.modelName,
+      company_name: params.companyName,
+      status: "pending",
+    })
+    .select("id")
+    .single();
+
+  if (error || !request) {
+    throw new Error(error?.message ?? "Failed to create experimental request");
+  }
+
+  return request.id;
+}
+
+async function completeExperimentalRequest(params: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  requestId: string;
+  stage: ExperimentalFlowStage;
+  modelName: string;
+  runLabel: string;
+  sourceRequestIds?: string[];
+  raw: string;
+  rows: ReturnType<typeof mergeAnswersByQuestion>;
+  errorMessage?: string | null;
+}) {
+  await params.supabase
+    .from("footprint_requests")
+    .update({
+      status: params.errorMessage ? "error" : "completed",
+      raw_response: JSON.stringify({
+        experimental_flow: {
+          flow_id: EXPERIMENTAL_FLOW_ID,
+          stage: params.stage,
+          model: params.modelName,
+          run_label: params.runLabel,
+          source_request_ids: params.sourceRequestIds ?? [],
+        },
+        raw_model_output: params.raw,
+      }),
+      parsed_response: {
+        experimental_flow: {
+          flow_id: EXPERIMENTAL_FLOW_ID,
+          stage: params.stage,
+          model: params.modelName,
+          run_label: params.runLabel,
+          source_request_ids: params.sourceRequestIds ?? [],
+        },
+        rows: params.rows,
+      },
+      error_message: params.errorMessage ?? null,
+    })
+    .eq("id", params.requestId);
+}
+
+async function failExperimentalRequest(params: {
+  supabase: Awaited<ReturnType<typeof createClient>>;
+  requestId: string;
+  message: string;
+}) {
+  await params.supabase
+    .from("footprint_requests")
+    .update({
+      status: "error",
+      error_message: params.message,
+    })
+    .eq("id", params.requestId);
+}
+
+async function verifyExperimentalProjectAccess(projectId: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Not authenticated", supabase, user: null, project: null };
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("id, prod_url, customers(name)")
+    .eq("id", projectId)
+    .single();
+
+  if (!project) {
+    return { error: "Project not found", supabase, user, project: null };
+  }
+
+  const customer = project.customers as unknown as { name: string } | null;
+  const companyName = customer?.name?.trim();
+  const prodUrl = project.prod_url?.trim();
+
+  if (!companyName) {
+    return {
+      error: "Company is required. Set it in project settings.",
+      supabase,
+      user,
+      project: null,
+    };
+  }
+
+  if (!prodUrl) {
+    return {
+      error:
+        "Production URL is required for authority analysis. Set it in project settings.",
+      supabase,
+      user,
+      project: null,
+    };
+  }
+
+  return {
+    error: null,
+    supabase,
+    user,
+    project: { companyName, prodUrl },
+  };
+}
+
+async function runExperimentalModelCall(params: {
+  modelName: string;
+  prompt: string;
+  openAiApiKey: string;
+  anthropicApiKey: string;
+}) {
+  if (params.modelName === EXPERIMENTAL_OPENAI_MODEL) {
+    return callOpenAiExperimentalAnswers({
+      apiKey: params.openAiApiKey,
+      model: EXPERIMENTAL_OPENAI_MODEL,
+      prompt: params.prompt,
+    });
+  }
+
+  return callClaudeExperimentalAnswers({
+    apiKey: params.anthropicApiKey,
+    model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5",
+    prompt: params.prompt,
+  });
+}
+
+type ExperimentalBaseTask = {
+  modelName: typeof EXPERIMENTAL_OPENAI_MODEL | typeof EXPERIMENTAL_CLAUDE_MODEL;
+  runIndex: number;
+};
+
+async function runInBatches<T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+) {
+  if (items.length === 0) {
+    return;
+  }
+
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  let nextIndex = 0;
+
+  await Promise.all(
+    Array.from({ length: safeConcurrency }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        await worker(items[currentIndex]);
+      }
+    }),
+  );
+}
+
+export async function requestExperimentalFlowBaseRuns(
+  projectId: string,
+  csvTemplate: string,
+  iterations = 10,
+) {
+  const access = await verifyExperimentalProjectAccess(projectId);
+  if (access.error || !access.user || !access.project) {
+    return { error: access.error ?? "Access error", created: 0, failed: 0 };
+  }
+
+  const openAiApiKey = process.env.OPENAI_API_KEY;
+  if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
+    return { error: "OpenAI API key is not configured.", created: 0, failed: 0 };
+  }
+
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicApiKey) {
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, failed: 0 };
+  }
+
+  const parsed = parseExperimentalTemplateQuestions(csvTemplate);
+  if (parsed.error) {
+    return { error: parsed.error, created: 0, failed: 0 };
+  }
+
+  const safeIterations = Math.max(1, Math.min(10, Math.floor(iterations)));
+  const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
+  const tasks: ExperimentalBaseTask[] = [];
+
+  for (const modelName of models) {
+    for (let runIndex = 1; runIndex <= safeIterations; runIndex += 1) {
+      tasks.push({ modelName, runIndex });
+    }
+  }
+
+  const configuredConcurrency = Number(process.env.EXPERIMENTAL_FLOW_BASE_CONCURRENCY ?? "4");
+  const concurrency = Number.isFinite(configuredConcurrency)
+    ? Math.max(1, Math.min(8, Math.floor(configuredConcurrency)))
+    : 4;
+
+  let created = 0;
+  let failed = 0;
+
+  await runInBatches(tasks, concurrency, async ({ modelName, runIndex }) => {
+    const runLabel = `base_${modelName}_run_${runIndex}`;
+    const requestId = await createExperimentalRequest({
+      supabase: access.supabase,
+      projectId,
+      userId: access.user.id,
+      companyName: access.project.companyName,
+      modelName,
+    });
+
+    try {
+      const prompt = buildExperimentalBasePrompt({
+        companyName: access.project.companyName,
+        prodUrl: access.project.prodUrl,
+        modelLabel: modelName,
+        questions: parsed.questions,
+      });
+
+      const result = await runExperimentalModelCall({
+        modelName,
+        prompt,
+        openAiApiKey,
+        anthropicApiKey,
+      });
+
+      const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+
+      await completeExperimentalRequest({
+        supabase: access.supabase,
+        requestId,
+        stage: "base",
+        modelName,
+        runLabel,
+        raw: result.raw,
+        rows: mergedRows,
+      });
+      created += 1;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown model error";
+      await failExperimentalRequest({
+        supabase: access.supabase,
+        requestId,
+        message,
+      });
+      failed += 1;
+    }
+  });
+
+  revalidatePath(`/projects/${projectId}/experimental-flow`);
+  return { error: null, created, failed, concurrency };
+}
+
+export async function requestExperimentalFlowSummaryRuns(
+
+  projectId: string,
+  csvTemplate: string,
+) {
+  const access = await verifyExperimentalProjectAccess(projectId);
+  if (access.error || !access.user || !access.project) {
+    return { error: access.error ?? "Access error", created: 0 };
+  }
+
+  const openAiApiKey = process.env.OPENAI_API_KEY;
+  if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
+    return { error: "OpenAI API key is not configured.", created: 0 };
+  }
+
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicApiKey) {
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0 };
+  }
+
+  const parsed = parseExperimentalTemplateQuestions(csvTemplate);
+  if (parsed.error) {
+    return { error: parsed.error, created: 0 };
+  }
+
+  const { data: existingRuns } = await access.supabase
+    .from("footprint_requests")
+    .select("id, model_name, parsed_response, status")
+    .eq("project_id", projectId)
+    .eq("status", "completed")
+    .order("created_at", { ascending: false });
+
+  const baseRuns = (existingRuns ?? []).filter((run) => {
+    const parsedResponse = run.parsed_response as {
+      experimental_flow?: { flow_id?: string; stage?: string; model?: string };
+      rows?: Array<{
+        question_id: string;
+        answer: string;
+        confidence: number;
+        notes: string;
+        sources: Array<{ title: string; url: string }>;
+      }>;
+    } | null;
+
+    return (
+      parsedResponse?.experimental_flow?.flow_id === EXPERIMENTAL_FLOW_ID &&
+      parsedResponse.experimental_flow.stage === "base" &&
+      Array.isArray(parsedResponse.rows)
+    );
+  });
+
+  const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
+  let created = 0;
+
+  for (const modelName of models) {
+    const modelRuns = baseRuns
+      .filter((run) => run.model_name === modelName)
+      .slice(0, 10)
+      .map((run, index) => {
+        const parsedResponse = run.parsed_response as {
+          rows: Array<{
+            question_id: string;
+            answer: string;
+            confidence: number;
+            notes: string;
+            sources: Array<{ title: string; url: string }>;
+          }>;
+        };
+
+        return {
+          requestId: run.id,
+          runLabel: `input_run_${index + 1}`,
+          items: parsedResponse.rows.map((row) => ({
+            question_id: row.question_id,
+            answer: row.answer,
+            confidence: row.confidence,
+            notes: row.notes,
+            sources: row.sources,
+          })),
+        };
+      });
+
+    if (modelRuns.length === 0) {
+      continue;
+    }
+
+    const requestId = await createExperimentalRequest({
+      supabase: access.supabase,
+      projectId,
+      userId: access.user.id,
+      companyName: access.project.companyName,
+      modelName,
+    });
+
+    try {
+      const prompt = buildExperimentalSummaryPrompt({
+        companyName: access.project.companyName,
+        prodUrl: access.project.prodUrl,
+        modelLabel: modelName,
+        questions: parsed.questions,
+        runs: modelRuns.map((run) => ({
+          runLabel: run.runLabel,
+          items: run.items,
+        })),
+      });
+
+      const result = await runExperimentalModelCall({
+        modelName,
+        prompt,
+        openAiApiKey,
+        anthropicApiKey,
+      });
+
+      const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+      await completeExperimentalRequest({
+        supabase: access.supabase,
+        requestId,
+        stage: "summary",
+        modelName,
+        runLabel: `summary_${modelName}`,
+        sourceRequestIds: modelRuns.map((run) => run.requestId),
+        raw: result.raw,
+        rows: mergedRows,
+      });
+      created += 1;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown model error";
+      await failExperimentalRequest({
+        supabase: access.supabase,
+        requestId,
+        message,
+      });
+    }
+  }
+
+  revalidatePath(`/projects/${projectId}/experimental-flow`);
+  return { error: null, created };
+}
+
+export async function requestExperimentalFlowFinalRuns(
+  projectId: string,
+  csvTemplate: string,
+) {
+  const access = await verifyExperimentalProjectAccess(projectId);
+  if (access.error || !access.user || !access.project) {
+    return { error: access.error ?? "Access error", created: 0 };
+  }
+
+  const openAiApiKey = process.env.OPENAI_API_KEY;
+  if (!openAiApiKey || openAiApiKey === "your-openai-api-key-here") {
+    return { error: "OpenAI API key is not configured.", created: 0 };
+  }
+
+  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicApiKey) {
+    return { error: "ANTHROPIC_API_KEY is not configured.", created: 0 };
+  }
+
+  const parsed = parseExperimentalTemplateQuestions(csvTemplate);
+  if (parsed.error) {
+    return { error: parsed.error, created: 0 };
+  }
+
+  const { data: existingRuns } = await access.supabase
+    .from("footprint_requests")
+    .select("id, model_name, parsed_response, status, created_at")
+    .eq("project_id", projectId)
+    .eq("status", "completed")
+    .order("created_at", { ascending: false });
+
+  const summaries = (existingRuns ?? []).filter((run) => {
+    const parsedResponse = run.parsed_response as {
+      experimental_flow?: { flow_id?: string; stage?: string; model?: string };
+      rows?: Array<{
+        question_id: string;
+        answer: string;
+        confidence: number;
+        notes: string;
+        sources: Array<{ title: string; url: string }>;
+      }>;
+    } | null;
+
+    return (
+      parsedResponse?.experimental_flow?.flow_id === EXPERIMENTAL_FLOW_ID &&
+      parsedResponse.experimental_flow.stage === "summary" &&
+      Array.isArray(parsedResponse.rows)
+    );
+  });
+
+  const latestOpenAi = summaries.find((run) => run.model_name === EXPERIMENTAL_OPENAI_MODEL);
+  const latestClaude = summaries.find((run) => run.model_name === EXPERIMENTAL_CLAUDE_MODEL);
+
+  if (!latestOpenAi || !latestClaude) {
+    return {
+      error: "Missing summary runs. Run summary stage first for both models.",
+      created: 0,
+    };
+  }
+
+  const openAiSummaryRows = ((latestOpenAi.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []).map((row) => ({
+    question_id: row.question_id,
+    answer: row.answer,
+    confidence: row.confidence,
+    notes: row.notes,
+    sources: row.sources,
+  }));
+  const claudeSummaryRows = ((latestClaude.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []).map((row) => ({
+    question_id: row.question_id,
+    answer: row.answer,
+    confidence: row.confidence,
+    notes: row.notes,
+    sources: row.sources,
+  }));
+
+  const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
+  let created = 0;
+
+  for (const modelName of models) {
+    const requestId = await createExperimentalRequest({
+      supabase: access.supabase,
+      projectId,
+      userId: access.user.id,
+      companyName: access.project.companyName,
+      modelName,
+    });
+
+    try {
+      const prompt = buildExperimentalFinalPrompt({
+        companyName: access.project.companyName,
+        prodUrl: access.project.prodUrl,
+        modelLabel: modelName,
+        questions: parsed.questions,
+        openAiSummary: openAiSummaryRows,
+        claudeSummary: claudeSummaryRows,
+      });
+
+      const result = await runExperimentalModelCall({
+        modelName,
+        prompt,
+        openAiApiKey,
+        anthropicApiKey,
+      });
+
+      const mergedRows = mergeAnswersByQuestion(parsed.questions, result.items);
+      await completeExperimentalRequest({
+        supabase: access.supabase,
+        requestId,
+        stage: "final",
+        modelName,
+        runLabel: `final_${modelName}`,
+        sourceRequestIds: [latestOpenAi.id, latestClaude.id],
+        raw: result.raw,
+        rows: mergedRows,
+      });
+      created += 1;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Unknown model error";
+      await failExperimentalRequest({
+        supabase: access.supabase,
+        requestId,
+        message,
+      });
+    }
+  }
+
+  revalidatePath(`/projects/${projectId}/experimental-flow`);
+  return { error: null, created };
+}
+
+
 export async function generateFootprintNarrative(
   projectId: string,
   requestId?: string,

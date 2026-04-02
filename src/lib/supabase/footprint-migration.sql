@@ -98,3 +98,8 @@ create policy "Users can delete public project footprint requests"
 -- 5. Index for fast lookups by project
 create index if not exists idx_footprint_requests_project_id
   on public.footprint_requests (project_id, created_at desc);
+
+
+-- 6. Optional metadata index for experimental flow lookups
+create index if not exists idx_footprint_requests_model_name
+  on public.footprint_requests (project_id, model_name, created_at desc);
