@@ -155,6 +155,7 @@ export function ExperimentalFlowView({
   const [templateName, setTemplateName] = useState<string>("oatly-answer-template-v2.csv");
   const [templateCsv, setTemplateCsv] = useState<string>(DEFAULT_EXPERIMENT_TEMPLATE);
   const [flowName, setFlowName] = useState<string>("default");
+  const [includeClaude, setIncludeClaude] = useState<boolean>(true);
   const [selectedStage, setSelectedStage] = useState<StageKey>("base");
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [lastRunInfo, setLastRunInfo] = useState<string | null>(null);
@@ -212,7 +213,12 @@ export function ExperimentalFlowView({
   function runBaseStage() {
     setError(null);
     startBaseTransition(async () => {
-      const result = await requestExperimentalFlowBaseRuns(projectId, templateCsv, normalizedFlowId);
+      const result = await requestExperimentalFlowBaseRuns(
+        projectId,
+        templateCsv,
+        normalizedFlowId,
+        includeClaude,
+      );
       if (result.error) {
         setError(result.error);
         setLastRunInfo(null);
@@ -227,7 +233,12 @@ export function ExperimentalFlowView({
   function runSummaryStage() {
     setError(null);
     startSummaryTransition(async () => {
-      const result = await requestExperimentalFlowSummaryRuns(projectId, templateCsv, normalizedFlowId);
+      const result = await requestExperimentalFlowSummaryRuns(
+        projectId,
+        templateCsv,
+        normalizedFlowId,
+        includeClaude,
+      );
       if (result.error) {
         setError(result.error);
         setLastRunInfo(null);
@@ -240,7 +251,12 @@ export function ExperimentalFlowView({
   function runFinalStage() {
     setError(null);
     startFinalTransition(async () => {
-      const result = await requestExperimentalFlowFinalRuns(projectId, templateCsv, normalizedFlowId);
+      const result = await requestExperimentalFlowFinalRuns(
+        projectId,
+        templateCsv,
+        normalizedFlowId,
+        includeClaude,
+      );
       if (result.error) {
         setError(result.error);
         setLastRunInfo(null);
@@ -306,6 +322,16 @@ export function ExperimentalFlowView({
           <span className="text-xs text-zinc-500 dark:text-zinc-400">
             flow_id: {normalizedFlowId}
           </span>
+
+          <label className="inline-flex items-center gap-2 rounded-full border border-zinc-300 px-3 py-1.5 text-xs text-zinc-700 dark:border-zinc-700 dark:text-zinc-300">
+            <input
+              type="checkbox"
+              checked={includeClaude}
+              onChange={(event) => setIncludeClaude(event.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Include Claude
+          </label>
 
           <button
             type="button"

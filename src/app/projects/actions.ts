@@ -1888,7 +1888,7 @@ async function runExperimentalModelCall(params: {
   modelName: string;
   prompt: string;
   openAiApiKey: string;
-  anthropicApiKey: string;
+  anthropicApiKey?: string;
 }) {
   if (params.modelName === EXPERIMENTAL_OPENAI_MODEL) {
     return callOpenAiExperimentalAnswers({
@@ -1896,6 +1896,10 @@ async function runExperimentalModelCall(params: {
       model: EXPERIMENTAL_OPENAI_MODEL,
       prompt: params.prompt,
     });
+  }
+
+  if (!params.anthropicApiKey) {
+    throw new Error("ANTHROPIC_API_KEY is required for Claude runs.");
   }
 
   return callClaudeExperimentalAnswers({
@@ -1909,6 +1913,7 @@ export async function requestExperimentalFlowBaseRuns(
   projectId: string,
   csvTemplate: string,
   flowId?: string,
+  includeClaude = true,
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
@@ -1924,7 +1929,7 @@ export async function requestExperimentalFlowBaseRuns(
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  if (!anthropicApiKey) {
+  if (includeClaude && !anthropicApiKey) {
     return { error: "ANTHROPIC_API_KEY is not configured.", created: 0, failed: 0, skipped: 0 };
   }
 
@@ -1933,7 +1938,9 @@ export async function requestExperimentalFlowBaseRuns(
     return { error: parsed.error, created: 0, failed: 0, skipped: 0 };
   }
 
-  const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
+  const models = includeClaude
+    ? ([EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const)
+    : ([EXPERIMENTAL_OPENAI_MODEL] as const);
 
   const { data: existingRuns } = await access.supabase
     .from("footprint_requests")
@@ -2024,6 +2031,7 @@ export async function requestExperimentalFlowSummaryRuns(
   projectId: string,
   csvTemplate: string,
   flowId?: string,
+  includeClaude = true,
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
@@ -2038,7 +2046,7 @@ export async function requestExperimentalFlowSummaryRuns(
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  if (!anthropicApiKey) {
+  if (includeClaude && !anthropicApiKey) {
     return { error: "ANTHROPIC_API_KEY is not configured.", created: 0 };
   }
 
@@ -2073,7 +2081,9 @@ export async function requestExperimentalFlowSummaryRuns(
     );
   });
 
-  const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
+  const models = includeClaude
+    ? ([EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const)
+    : ([EXPERIMENTAL_OPENAI_MODEL] as const);
   let created = 0;
 
   for (const modelName of models) {
@@ -2181,6 +2191,7 @@ export async function requestExperimentalFlowFinalRuns(
   projectId: string,
   csvTemplate: string,
   flowId?: string,
+  includeClaude = true,
 ) {
   const access = await verifyExperimentalProjectAccess(projectId);
   if (access.error || !access.user || !access.project) {
@@ -2195,7 +2206,7 @@ export async function requestExperimentalFlowFinalRuns(
   }
 
   const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  if (!anthropicApiKey) {
+  if (includeClaude && !anthropicApiKey) {
     return { error: "ANTHROPIC_API_KEY is not configured.", created: 0 };
   }
 
@@ -2233,9 +2244,16 @@ export async function requestExperimentalFlowFinalRuns(
   const latestOpenAi = summaries.find((run) => run.model_name === EXPERIMENTAL_OPENAI_MODEL);
   const latestClaude = summaries.find((run) => run.model_name === EXPERIMENTAL_CLAUDE_MODEL);
 
-  if (!latestOpenAi || !latestClaude) {
+  if (!latestOpenAi) {
     return {
-      error: "Missing summary runs. Run summary stage first for both models.",
+      error: "Missing GPT summary run. Run summary stage first.",
+      created: 0,
+    };
+  }
+
+  if (includeClaude && !latestClaude) {
+    return {
+      error: "Missing Claude summary run. Run summary stage first with Claude enabled.",
       created: 0,
     };
   }
@@ -2247,15 +2265,19 @@ export async function requestExperimentalFlowFinalRuns(
     notes: row.notes,
     sources: row.sources,
   }));
-  const claudeSummaryRows = ((latestClaude.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []).map((row) => ({
-    question_id: row.question_id,
-    answer: row.answer,
-    confidence: row.confidence,
-    notes: row.notes,
-    sources: row.sources,
-  }));
+  const claudeSummaryRows = latestClaude
+    ? ((latestClaude.parsed_response as { rows: ReturnType<typeof mergeAnswersByQuestion> }).rows ?? []).map((row) => ({
+        question_id: row.question_id,
+        answer: row.answer,
+        confidence: row.confidence,
+        notes: row.notes,
+        sources: row.sources,
+      }))
+    : [];
 
-  const models = [EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const;
+  const models = includeClaude
+    ? ([EXPERIMENTAL_OPENAI_MODEL, EXPERIMENTAL_CLAUDE_MODEL] as const)
+    : ([EXPERIMENTAL_OPENAI_MODEL] as const);
   let created = 0;
 
   for (const modelName of models) {
@@ -2307,7 +2329,7 @@ export async function requestExperimentalFlowFinalRuns(
         flowId: targetFlowId,
         modelName,
         runLabel: `final_${modelName}`,
-        sourceRequestIds: [latestOpenAi.id, latestClaude.id],
+        sourceRequestIds: latestClaude ? [latestOpenAi.id, latestClaude.id] : [latestOpenAi.id],
         raw: result.raw,
         rows: mergedRows,
       });
